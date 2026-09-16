@@ -1,0 +1,9 @@
+# build files
+output/
+outputs/
+run/
+runs/
+build/
+
+# logs
+*.log
