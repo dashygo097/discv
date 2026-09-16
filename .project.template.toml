@@ -1,0 +1,11 @@
+schema_version = 1
+
+[project]
+name = ""
+
+[rtl]
+top = ""
+sources = []
+include_dirs = []
+
+[rtl.defines]

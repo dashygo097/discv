@@ -1,8 +1,5 @@
 # build files
-output/
-outputs/
-run/
-runs/
+.project.toml
 build/
 
 # logs
