@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -53,23 +54,37 @@ def string_list(value, location):
     return value
 
 
+def require_table(raw, key):
+    value = raw.get(key)
+    if not isinstance(value, dict):
+        raise ConfigError("{}: expected a table".format(key))
+    return value
+
+
+def require_bool(table, key, location):
+    value = table.get(key)
+    if not isinstance(value, bool):
+        raise ConfigError("{}.{}: expected a boolean".format(location, key))
+    return value
+
+
 def load_config(config_path, project_root):
     with config_path.open("rb") as stream:
         raw = tomllib.load(stream)
 
-    reject_unknown(raw, {"schema_version", "project", "rtl"}, "<root>")
+    reject_unknown(
+        raw,
+        {"schema_version", "project", "rtl", "build", "environment", "flow", "workflow"},
+        "<root>",
+    )
     if raw.get("schema_version") != 1:
         raise ConfigError("schema_version: expected integer 1")
 
-    project = raw.get("project")
-    if not isinstance(project, dict):
-        raise ConfigError("project: expected a table")
+    project = require_table(raw, "project")
     reject_unknown(project, {"name"}, "project")
     name = require_string(project, "name", "project")
 
-    rtl = raw.get("rtl")
-    if not isinstance(rtl, dict):
-        raise ConfigError("rtl: expected a table")
+    rtl = require_table(raw, "rtl")
     reject_unknown(rtl, {"top", "sources", "include_dirs", "defines"}, "rtl")
     top = require_string(rtl, "top", "rtl")
     if not IDENTIFIER.match(top):
@@ -99,6 +114,64 @@ def load_config(config_path, project_root):
     for path in include_dirs:
         if not path.is_dir():
             raise ConfigError("RTL include directory does not exist: {}".format(path))
+    headers = sorted(
+        str(path.resolve())
+        for directory in include_dirs
+        for path in directory.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".h", ".vh", ".svh"}
+    )
+
+    build = require_table(raw, "build")
+    reject_unknown(build, {"jobs"}, "build")
+    jobs = build.get("jobs")
+    if isinstance(jobs, bool) or not isinstance(jobs, int) or jobs < 1:
+        raise ConfigError("build.jobs: expected a positive integer")
+
+    environment = require_table(raw, "environment")
+    reject_unknown(
+        environment,
+        {"python", "required_commands", "required_variables"},
+        "environment",
+    )
+    python = require_string(environment, "python", "environment")
+    required_commands = string_list(
+        environment.get("required_commands", []), "environment.required_commands"
+    )
+    required_variables = string_list(
+        environment.get("required_variables", []), "environment.required_variables"
+    )
+    for variable in required_variables:
+        if not IDENTIFIER.match(variable):
+            raise ConfigError(
+                "environment.required_variables: invalid variable name: {}".format(variable)
+            )
+
+    flow = require_table(raw, "flow")
+    reject_unknown(flow, {"lint"}, "flow")
+    lint = flow.get("lint")
+    if not isinstance(lint, dict):
+        raise ConfigError("flow.lint: expected a table")
+    reject_unknown(lint, {"enabled", "tool", "options"}, "flow.lint")
+    lint_enabled = require_bool(lint, "enabled", "flow.lint")
+    lint_tool = lint.get("tool")
+    if not isinstance(lint_tool, str):
+        raise ConfigError("flow.lint.tool: expected a string")
+    lint_options = string_list(lint.get("options", []), "flow.lint.options")
+    if lint_enabled and not lint_tool:
+        raise ConfigError("flow.lint.tool: required when lint is enabled")
+    if lint_enabled and lint_tool != "verilator":
+        raise ConfigError("flow.lint.tool: supported value is 'verilator'")
+
+    workflow = require_table(raw, "workflow")
+    reject_unknown(workflow, {"stages"}, "workflow")
+    stages = string_list(workflow.get("stages", []), "workflow.stages")
+    unsupported = sorted(set(stages) - {"lint"})
+    if unsupported:
+        raise ConfigError("workflow.stages: unsupported stage(s): {}".format(", ".join(unsupported)))
+    if "lint" in stages and not lint_enabled:
+        raise ConfigError("workflow.stages: lint is listed but flow.lint.enabled is false")
+    if len(stages) != len(set(stages)):
+        raise ConfigError("workflow.stages: duplicate stages are not allowed")
 
     return {
         "schema_version": 1,
@@ -107,8 +180,23 @@ def load_config(config_path, project_root):
             "top": top,
             "sources": [str(path) for path in sources],
             "include_dirs": [str(path) for path in include_dirs],
+            "headers": headers,
             "defines": normalized_defines,
         },
+        "build": {"jobs": jobs},
+        "environment": {
+            "python": python,
+            "required_commands": required_commands,
+            "required_variables": required_variables,
+        },
+        "flow": {
+            "lint": {
+                "enabled": lint_enabled,
+                "tool": lint_tool,
+                "options": lint_options,
+            }
+        },
+        "workflow": {"stages": stages},
     }
 
 
@@ -149,7 +237,38 @@ def render_makefile(config, digest):
             header("#", digest),
             "PROJECT_NAME := {}\n".format(make_escape(config["project"]["name"])),
             "PROJECT_TOP := {}\n".format(make_escape(config["rtl"]["top"])),
+            "BUILD_JOBS := {}\n".format(config["build"]["jobs"]),
+            "LINT_ENABLED := {}\n".format("1" if config["flow"]["lint"]["enabled"] else "0"),
+            "LINT_TOOL := {}\n".format(make_escape(config["flow"]["lint"]["tool"])),
+            "WORKFLOW_STAGES := {}\n".format(" ".join(config["workflow"]["stages"])),
+            "RTL_SOURCES := {}\n".format(" ".join(make_escape(path) for path in config["rtl"]["sources"])),
+            "RTL_HEADERS := {}\n".format(" ".join(make_escape(path) for path in config["rtl"]["headers"])),
             "PROJECT_CONFIG_DIGEST := {}\n".format(digest),
+        ]
+    )
+
+
+def shell_array(name, values):
+    return "{}=({})\n".format(name, " ".join(shlex.quote(str(value)) for value in values))
+
+
+def render_environment(config, digest):
+    lint = config["flow"]["lint"]
+    return "".join(
+        [
+            header("#", digest),
+            "PROJECT_NAME={}\n".format(shlex.quote(config["project"]["name"])),
+            "RTL_TOP={}\n".format(shlex.quote(config["rtl"]["top"])),
+            "BUILD_JOBS={}\n".format(config["build"]["jobs"]),
+            "PROJECT_PYTHON={}\n".format(shlex.quote(config["environment"]["python"])),
+            "LINT_ENABLED={}\n".format("1" if lint["enabled"] else "0"),
+            "LINT_TOOL={}\n".format(shlex.quote(lint["tool"])),
+            "LINT_OPTION_COUNT={}\n".format(len(lint["options"])),
+            shell_array("LINT_OPTIONS", lint["options"]),
+            shell_array("PROJECT_REQUIRED_COMMANDS", config["environment"]["required_commands"]),
+            shell_array("PROJECT_REQUIRED_VARIABLES", config["environment"]["required_variables"]),
+            "WORKFLOW_STAGE_COUNT={}\n".format(len(config["workflow"]["stages"])),
+            shell_array("WORKFLOW_STAGES", config["workflow"]["stages"]),
         ]
     )
 
@@ -161,11 +280,12 @@ def render_outputs(config, config_path):
         "generator_version": GENERATOR_VERSION,
         "project_file": str(config_path.resolve()),
         "schema_version": config["schema_version"],
-        "outputs": ["manifest.json", "project.mk", "rtl.f"],
+        "outputs": ["manifest.json", "project.env", "project.mk", "rtl.f"],
     }
     return {
         "rtl.f": render_filelist(config, digest),
         "project.mk": render_makefile(config, digest),
+        "project.env": render_environment(config, digest),
         "manifest.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
     }
 

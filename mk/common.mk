@@ -24,20 +24,21 @@ dirs:
 
 init: dirs
 	@echo "[INIT] Initializing Project"
-	@test ! -e $(BUILD_DIR)/Project.toml || { \
-		echo "ERROR: $(BUILD_DIR)/Project.toml already exists" >&2; \
+	@test ! -e $(PROJECT_ROOT)/Project.toml || { \
+		echo "ERROR: $(PROJECT_ROOT)/Project.toml already exists" >&2; \
 		exit 1; \
 	}
-	@cp $(PROJECT_ROOT)/.project.template.toml $(BUILD_DIR)/Project.toml
-	@echo "[INIT] $(BUILD_DIR)/Project.toml"
+	@cp $(PROJECT_ROOT)/.project.template.toml $(PROJECT_ROOT)/Project.toml
+	@echo "[INIT] $(PROJECT_ROOT)/Project.toml"
 
 clean:
-	@echo "[CLEAN] $(BUILD_DIR)"
-	@$(RM) $(BUILD_DIR)
+	@$(MAKE) --no-print-directory config-clean lint-clean
+	@echo "[CLEAN] Generated flow outputs removed; virtual environment preserved"
 
 help:
 	@echo "Available targets:"
 	@echo "  init         Init project"
 	@echo "  config       Validate Project.toml and generate build configuration"
 	@echo "  lint         Run RTL lint"
-	@echo "  clean        Remove build directory"
+	@echo "  workflow     Run the ordered stages from Project.toml"
+	@echo "  clean        Remove generated flow outputs"

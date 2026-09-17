@@ -4,21 +4,14 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
+source "${PROJECT_ROOT}/scripts/common/check_env.sh"
 
 PYTHON_BIN=${PYTHON_BIN:-python3}
 VENV_DIR=${PROJECT_VENV_DIR:-${PROJECT_ROOT}/build/.venv}
 REQUIREMENTS=${SCRIPT_DIR}/requirements.txt
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "ERROR: Python interpreter not found: ${PYTHON_BIN}" >&2
-  exit 1
-fi
-
-if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(sys.version_info < (3, 6))'; then
-  echo "ERROR: project configuration requires Python 3.6 or newer" >&2
-  "${PYTHON_BIN}" --version >&2 || true
-  exit 1
-fi
+require_python_version "${PYTHON_BIN}" 3 6
+require_file "${REQUIREMENTS}"
 
 if [[ -e "${VENV_DIR}" && ! -x "${VENV_DIR}/bin/python" ]]; then
   echo "ERROR: path exists but is not a Python virtual environment: ${VENV_DIR}" >&2

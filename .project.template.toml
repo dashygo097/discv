@@ -9,3 +9,19 @@ sources = []
 include_dirs = []
 
 [rtl.defines]
+
+[build]
+jobs = 1
+
+[environment]
+python = "python3"
+required_commands = ["bash"]
+required_variables = []
+
+[flow.lint]
+enabled = false
+tool = ""
+options = []
+
+[workflow]
+stages = []
