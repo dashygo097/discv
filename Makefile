@@ -1,4 +1,5 @@
 include mk/common.mk
+include mk/env.mk
 include mk/config.mk
 include mk/lint.mk
 include mk/workflow.mk

@@ -6,8 +6,10 @@ LINT_WORK_DIR   := $(LINT_BUILD_DIR)/work
 
 # Inputs
 LINT_FILELIST := $(RTL_FILELIST)
+ifneq ($(filter lint,$(MAKECMDGOALS)),)
 ifneq ($(wildcard $(CONFIG_MAKEFILE)),)
 include $(CONFIG_MAKEFILE)
+endif
 endif
 RTL_SOURCES ?=
 RTL_HEADERS ?=

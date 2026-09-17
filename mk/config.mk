@@ -7,14 +7,13 @@ CONFIG_MAKEFILE       := $(GENERATED_DIR)/project.mk
 PROJECT_ENV           := $(GENERATED_DIR)/project.env
 CONFIG_OUTPUTS        := $(RTL_FILELIST) $(CONFIG_MAKEFILE) $(PROJECT_ENV) $(CONFIG_MANIFEST)
 CONFIG_STAMP          := $(GENERATED_DIR)/.done
-VENV_PYTHON           := $(BUILD_DIR)/.venv/bin/python
-PYTHON                ?= $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),python3)
+PYTHON                ?= $(VENV_PYTHON)
 
 .PHONY: config config-clean
 
 config: $(CONFIG_OUTPUTS)
 
-$(CONFIG_STAMP): $(PROJECT_CONFIG) $(PROJECT_CONFIG_SCRIPT) $(PROJECT_CONFIG_RUNNER) \
+$(CONFIG_STAMP): $(VENV_STAMP) $(PROJECT_CONFIG) $(PROJECT_CONFIG_SCRIPT) $(PROJECT_CONFIG_RUNNER) \
 		$(SCRIPT_DIR)/common/check_env.sh
 	@echo "[CONFIG] Generating project configuration"
 	@$(MKDIR) $(GENERATED_DIR)

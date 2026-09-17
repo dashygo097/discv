@@ -17,7 +17,7 @@ MKDIR := mkdir -p
 RM    := rm -rf
 
 # Common targets
-.PHONY: dirs init clean help
+.PHONY: dirs init clean distclean help
 
 dirs:
 	@$(MKDIR) $(BUILD_DIR)
@@ -35,10 +35,20 @@ clean:
 	@$(MAKE) --no-print-directory config-clean lint-clean
 	@echo "[CLEAN] Generated flow outputs removed; virtual environment preserved"
 
+distclean:
+	@test "$(BUILD_DIR)" = "$(PROJECT_ROOT)/build"
+	@test "$(PROJECT_CONFIG)" = "$(PROJECT_ROOT)/Project.toml"
+	@echo "[DISTCLEAN] $(BUILD_DIR)"
+	@$(RM) "$(BUILD_DIR)"
+	@echo "[DISTCLEAN] $(PROJECT_CONFIG)"
+	@rm -f "$(PROJECT_CONFIG)"
+
 help:
 	@echo "Available targets:"
 	@echo "  init         Init project"
+	@echo "  env          Create or update the project Python environment"
 	@echo "  config       Validate Project.toml and generate build configuration"
 	@echo "  lint         Run RTL lint"
 	@echo "  workflow     Run the ordered stages from Project.toml"
 	@echo "  clean        Remove generated flow outputs"
+	@echo "  distclean    Remove build directory and Project.toml"
