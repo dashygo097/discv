@@ -22,34 +22,9 @@ if [[ "${LINT_ENABLED}" != "1" ]]; then
   exit 1
 fi
 
-require_cmd "${LINT_TOOL}"
 mkdir -p "${BUILD_DIR}/logs" "${BUILD_DIR}/reports" "${BUILD_DIR}/work"
 
-case "${LINT_TOOL}" in
-  sg|sg_shell|spyglass)
-    ;;
-  verilator)
-    if [[ "${LINT_OPTION_COUNT}" -eq 0 ]]; then
-      "${LINT_TOOL}" \
-        --lint-only \
-        --top-module "${RTL_TOP}" \
-        --Mdir "${BUILD_DIR}/work" \
-        -f "${FILELIST}" \
-        2>&1 | tee "${BUILD_DIR}/logs/lint.log"
-    else
-      "${LINT_TOOL}" \
-        --lint-only \
-        --top-module "${RTL_TOP}" \
-        --Mdir "${BUILD_DIR}/work" \
-        "${LINT_OPTIONS[@]}" \
-        -f "${FILELIST}" \
-        2>&1 | tee "${BUILD_DIR}/logs/lint.log"
-    fi
-    ;;
-  *)
-    echo "ERROR: unsupported lint tool: ${LINT_TOOL}" >&2
-    exit 1
-    ;;
-esac
+TOOL_RUNNER=${SCRIPT_DIR}/${LINT_TOOL}.sh
+require_file "${TOOL_RUNNER}"
 
-cp "${BUILD_DIR}/logs/lint.log" "${BUILD_DIR}/reports/lint.rpt"
+exec "${TOOL_RUNNER}"

@@ -25,7 +25,7 @@ LINT_STAMP  := $(LINT_BUILD_DIR)/.done
 lint: $(LINT_STAMP)
 
 $(LINT_STAMP): $(LINT_FILELIST) $(PROJECT_ENV) $(RTL_SOURCES) $(RTL_HEADERS) \
-		$(SCRIPT_DIR)/lint/run.sh $(SCRIPT_DIR)/common/check_env.sh
+		$(wildcard $(SCRIPT_DIR)/lint/*) $(SCRIPT_DIR)/common/check_env.sh
 	@echo "[LINT] Running RTL lint"
 	@$(MKDIR) $(LINT_LOG_DIR)
 	@$(MKDIR) $(LINT_REPORT_DIR)

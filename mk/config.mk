@@ -4,7 +4,7 @@ PROJECT_CONFIG_SCRIPT := $(SCRIPT_DIR)/config/project_config.py
 PROJECT_CONFIG_RUNNER := $(SCRIPT_DIR)/config/run.sh
 CONFIG_MANIFEST       := $(GENERATED_DIR)/manifest.json
 CONFIG_MAKEFILE       := $(GENERATED_DIR)/project.mk
-CONFIG_SVH            := $(GENERATED_DIR)/_config.svh
+CONFIG_SVH            := $(GENERATED_DIR)/cfg.svh
 PROJECT_ENV           := $(GENERATED_DIR)/project.env
 CONFIG_OUTPUTS        := $(RTL_FILELIST) $(CONFIG_MAKEFILE) $(CONFIG_SVH) \
 		$(PROJECT_ENV) $(CONFIG_MANIFEST)

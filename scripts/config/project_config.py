@@ -174,8 +174,10 @@ def load_config(config_path, project_root):
     lint_options = string_list(lint.get("options", []), "flow.lint.options")
     if lint_enabled and not lint_tool:
         raise ConfigError("flow.lint.tool: required when lint is enabled")
-    if lint_enabled and lint_tool != "verilator":
-        raise ConfigError("flow.lint.tool: supported value is 'verilator'")
+    supported_lint_tools = {"spyglass", "verilator"}
+    if lint_enabled and lint_tool not in supported_lint_tools:
+        supported = ", ".join(sorted(supported_lint_tools))
+        raise ConfigError(f"flow.lint.tool: supported values are {supported}")
 
     workflow = require_table(raw, "workflow")
     reject_unknown(workflow, {"stages"}, "workflow")
