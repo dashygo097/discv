@@ -3,6 +3,9 @@ schema_version = 1
 [project]
 name = ""
 
+[parameters]
+XLEN = 32
+
 [rtl]
 top = ""
 sources = []

@@ -26,6 +26,8 @@ require_cmd "${LINT_TOOL}"
 mkdir -p "${BUILD_DIR}/logs" "${BUILD_DIR}/reports" "${BUILD_DIR}/work"
 
 case "${LINT_TOOL}" in
+  sg|sg_shell|spyglass)
+    ;;
   verilator)
     if [[ "${LINT_OPTION_COUNT}" -eq 0 ]]; then
       "${LINT_TOOL}" \

@@ -73,6 +73,7 @@ def load_config(config_path, project_root):
         {
             "schema_version",
             "project",
+            "parameters",
             "rtl",
             "build",
             "environment",
@@ -87,6 +88,16 @@ def load_config(config_path, project_root):
     project = require_table(raw, "project")
     reject_unknown(project, {"name"}, "project")
     name = require_string(project, "name", "project")
+
+    parameters = require_table(raw, "parameters")
+    normalized_parameters = {}
+    for key in sorted(parameters):
+        if not IDENTIFIER.match(key):
+            raise ConfigError(f"parameters.{key}: invalid SystemVerilog identifier")
+        value = parameters[key]
+        if not isinstance(value, (str, int, bool)):
+            raise ConfigError(f"parameters.{key}: expected string, integer, or boolean")
+        normalized_parameters[key] = value
 
     rtl = require_table(raw, "rtl")
     reject_unknown(rtl, {"top", "sources", "include_dirs", "defines"}, "rtl")
@@ -184,6 +195,7 @@ def load_config(config_path, project_root):
     return {
         "schema_version": 1,
         "project": {"name": name},
+        "parameters": normalized_parameters,
         "rtl": {
             "top": top,
             "sources": [str(path) for path in sources],
@@ -222,8 +234,9 @@ def header(comment, digest):
     )
 
 
-def render_filelist(config, digest):
+def render_filelist(config, digest, output_dir):
     lines = [header("#", digest).rstrip()]
+    lines.append(f"+incdir+{output_dir}")
     lines.extend(f"+incdir+{path}" for path in config["rtl"]["include_dirs"])
     for name, value in sorted(config["rtl"]["defines"].items()):
         if isinstance(value, bool):
@@ -232,6 +245,30 @@ def render_filelist(config, digest):
         else:
             lines.append(f"+define+{name}={value}")
     lines.extend(config["rtl"]["sources"])
+    return "\n".join(lines) + "\n"
+
+
+def systemverilog_string(value):
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def render_svh(config, digest):
+    lines = [header("//", digest).rstrip()]
+    for name, value in sorted(config["parameters"].items()):
+        if isinstance(value, bool):
+            literal = "1'b1" if value else "1'b0"
+            lines.append(f"localparam bit {name} = {literal};")
+        elif isinstance(value, int):
+            parameter_type = "int unsigned" if value >= 0 else "int"
+            lines.append(f"localparam {parameter_type} {name} = {value};")
+        else:
+            lines.append(f"localparam string {name} = {systemverilog_string(value)};")
     return "\n".join(lines) + "\n"
 
 
@@ -299,20 +336,27 @@ def render_environment(config, digest):
     )
 
 
-def render_outputs(config, config_path):
+def render_outputs(config, config_path, output_dir):
     digest = config_digest(config)
     manifest = {
         "configuration_digest": digest,
         "generator_version": GENERATOR_VERSION,
         "project_file": str(config_path.resolve()),
         "schema_version": config["schema_version"],
-        "outputs": ["manifest.json", "project.env", "project.mk", "rtl.f"],
+        "outputs": [
+            "manifest.json",
+            "project.env",
+            "project.mk",
+            "cfg.svh",
+            "rtl.f",
+        ],
     }
     return {
-        "rtl.f": render_filelist(config, digest),
+        "manifest.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         "project.mk": render_makefile(config, digest),
         "project.env": render_environment(config, digest),
-        "manifest.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        "cfg.svh": render_svh(config, digest),
+        "rtl.f": render_filelist(config, digest, output_dir),
     }
 
 
@@ -364,9 +408,9 @@ def main():
             print(f"Configuration is valid: {config_path}")
             return 0
         if args.output is None:
-            raise ConfigError(f"--output is required for {args.comand}")
+            raise ConfigError(f"--output is required for {args.command}")
         output_dir = args.output.resolve()
-        outputs = render_outputs(config, config_path)
+        outputs = render_outputs(config, config_path, output_dir)
         if args.command == "generate":
             for name, content in sorted(outputs.items()):
                 atomic_write(output_dir / name, content)
