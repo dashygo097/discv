@@ -325,7 +325,9 @@ def load_config(config_path, project_root):
                 f"environment.required_variables: invalid variable name: {variable}"
             )
 
-    flow = require_table(raw, "flow")
+    flow = raw.get("flow", {})
+    if not isinstance(flow, dict):
+        raise ConfigError("flow: expected a table")
     reject_unknown(flow, {"lint"}, "flow")
     lint = flow.get("lint", {})
     if not isinstance(lint, dict):

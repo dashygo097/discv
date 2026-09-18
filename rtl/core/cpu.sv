@@ -1,23 +1,21 @@
 module cpu
   import riscv_pkg::*;
   import core_types_pkg::*;
-#(
-    parameter int unsigned XLEN = cfg_pkg::XLEN
-) (
-    input  instr_t                  instr_i,
-    input  logic         [XLEN-1:0] pc_i,
-    input  logic         [XLEN-1:0] rs1_data_i,
-    input  logic         [XLEN-1:0] rs2_data_i,
-    output reg_addr_t               rs1_o,
-    output reg_addr_t               rs2_o,
-    output reg_addr_t               rd_o,
-    output logic         [XLEN-1:0] immediate_o,
-    output logic         [XLEN-1:0] result_o,
-    output decode_ctrl_t            ctrl_o
+(
+    input  instr_t       instr_i,
+    input  addr_t        pc_i,
+    input  word_t        rs1_data_i,
+    input  word_t        rs2_data_i,
+    output reg_addr_t    rs1_o,
+    output reg_addr_t    rs2_o,
+    output reg_addr_t    rd_o,
+    output word_t        immediate_o,
+    output word_t        result_o,
+    output decode_ctrl_t ctrl_o
 );
 
-  logic [XLEN-1:0] operand_a;
-  logic [XLEN-1:0] operand_b;
+  word_t operand_a;
+  word_t operand_b;
 
   decoder u_decoder (
       .instr_i,
@@ -27,9 +25,7 @@ module cpu
       .ctrl_o
   );
 
-  immediate_gen #(
-      .XLEN(XLEN)
-  ) u_immediate_gen (
+  immediate_gen u_immediate_gen (
       .instr_i(instr_i[ILEN-1:7]),
       .sel_i  (ctrl_o.immediate),
       .immediate_o
@@ -49,9 +45,7 @@ module cpu
     endcase
   end
 
-  alu #(
-      .XLEN(XLEN)
-  ) u_alu (
+  alu u_alu (
       .lhs_i(operand_a),
       .rhs_i(operand_b),
       .op_i (ctrl_o.alu_op),

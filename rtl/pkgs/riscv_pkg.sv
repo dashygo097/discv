@@ -1,8 +1,12 @@
 package riscv_pkg;
   localparam int unsigned ILEN = 32;
 
+  typedef logic [cfg_pkg::XLEN-1:0] word_t;
+  typedef logic [cfg_pkg::XLEN-1:0] addr_t;
   typedef logic [ILEN-1:0] instr_t;
   typedef logic [4:0] reg_addr_t;
+  typedef logic [2:0] funct3_t;
+  typedef logic [6:0] funct7_t;
 
   typedef enum logic [6:0] {
     OPCODE_LOAD     = 7'b0000011,
@@ -19,18 +23,18 @@ package riscv_pkg;
   } opcode_e;
 
   typedef struct packed {
-    logic [31:25] funct7;
-    reg_addr_t    rs2;
-    reg_addr_t    rs1;
-    logic [14:12] funct3;
-    reg_addr_t    rd;
-    opcode_e      opcode;
+    funct7_t   funct7;
+    reg_addr_t rs2;
+    reg_addr_t rs1;
+    funct3_t   funct3;
+    reg_addr_t rd;
+    opcode_e   opcode;
   } instr_rtype_t;
 
   typedef struct packed {
     logic [31:20] imm_11_0;
     reg_addr_t    rs1;
-    logic [14:12] funct3;
+    funct3_t      funct3;
     reg_addr_t    rd;
     opcode_e      opcode;
   } instr_itype_t;
@@ -39,7 +43,7 @@ package riscv_pkg;
     logic [31:25] imm_11_5;
     reg_addr_t    rs2;
     reg_addr_t    rs1;
-    logic [14:12] funct3;
+    funct3_t      funct3;
     logic [11:7]  imm_4_0;
     opcode_e      opcode;
   } instr_stype_t;
@@ -49,7 +53,7 @@ package riscv_pkg;
     logic [30:25] imm_10_5;
     reg_addr_t    rs2;
     reg_addr_t    rs1;
-    logic [14:12] funct3;
+    funct3_t      funct3;
     logic [11:8]  imm_4_1;
     logic         imm_11;
     opcode_e      opcode;

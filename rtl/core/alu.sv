@@ -1,15 +1,14 @@
 module alu
+  import riscv_pkg::*;
   import core_types_pkg::*;
-#(
-    parameter int unsigned XLEN = cfg_pkg::XLEN
-) (
-    input  logic    [XLEN-1:0] lhs_i,
-    input  logic    [XLEN-1:0] rhs_i,
-    input  alu_op_e            op_i,
-    output logic    [XLEN-1:0] result_o
+(
+    input  word_t   lhs_i,
+    input  word_t   rhs_i,
+    input  alu_op_e op_i,
+    output word_t   result_o
 );
 
-  localparam int unsigned SHAMT_WIDTH = $clog2(XLEN);
+  localparam int unsigned SHAMT_WIDTH = $clog2($bits(word_t));
 
   always_comb begin
     result_o = '0;
