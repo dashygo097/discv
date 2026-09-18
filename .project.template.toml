@@ -2,6 +2,7 @@ schema_version = 1
 
 [parameters]
 XLEN = 32
+RESET_VECTOR = 0x80000000
 
 [rtl]
 top = ""
@@ -10,13 +11,13 @@ top = ""
 
 [[rtl.filesets]]
 name = "packages"
-roots = ["rtl/include/pkgs"]
+roots = ["rtl/pkgs"]
 patterns = ["**/*.sv"]
 
 [[rtl.filesets]]
 name = "design"
-roots = ["rtl/core", "rtl/bus"]
-patterns = ["**/*.sv", "**/*.v"]
+roots = ["rtl/core"]
+patterns = ["**/*.sv"]
 
 [[rtl.filesets]]
 name = "top"

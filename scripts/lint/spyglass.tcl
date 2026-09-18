@@ -4,6 +4,6 @@ foreach variable {RTL_FILELIST RTL_TOP} {
   }
 }
 
-set_option enableSV yes
+set_option enableSV09 yes
 set_option top $::env(RTL_TOP)
 read_file -type sourcelist $::env(RTL_FILELIST)

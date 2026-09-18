@@ -444,6 +444,18 @@ def systemverilog_string(value):
     return f'"{escaped}"'
 
 
+def systemverilog_integer(value):
+    if 0 <= value <= 0xFFFFFFFF:
+        return "int unsigned", f"32'd{value}"
+    if 0 <= value <= 0xFFFFFFFFFFFFFFFF:
+        return "longint unsigned", f"64'd{value}"
+    if -0x80000000 <= value < 0:
+        return "int", f"32'sh{value & 0xFFFFFFFF:08x}"
+    if -0x8000000000000000 <= value < 0:
+        return "longint", f"64'sh{value & 0xFFFFFFFFFFFFFFFF:016x}"
+    raise ConfigError(f"integer parameter is outside the 64-bit range: {value}")
+
+
 def render_svh(config, digest):
     lines = [header("//", digest).rstrip()]
     for name, value in sorted(config["parameters"].items()):
@@ -451,8 +463,8 @@ def render_svh(config, digest):
             literal = "1'b1" if value else "1'b0"
             lines.append(f"localparam bit {name} = {literal};")
         elif isinstance(value, int):
-            parameter_type = "int unsigned" if value >= 0 else "int"
-            lines.append(f"localparam {parameter_type} {name} = {value};")
+            parameter_type, literal = systemverilog_integer(value)
+            lines.append(f"localparam {parameter_type} {name} = {literal};")
         else:
             lines.append(f"localparam string {name} = {systemverilog_string(value)};")
     return "\n".join(lines) + "\n"
