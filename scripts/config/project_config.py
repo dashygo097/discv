@@ -27,6 +27,7 @@ GENERATOR_VERSION = "0.2.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
+GENERATED_HEADER_NAMES = {"cfg.svh"}
 
 
 class ConfigError(Exception):
@@ -67,6 +68,7 @@ def require_bool(table, key, location):
 
 
 def project_path(project_root, value, location):
+    project_root = project_root.resolve()
     path = Path(value)
     if path.is_absolute() or ".." in path.parts:
         raise ConfigError(f"{location}: expected a path relative to the project root")
@@ -77,11 +79,40 @@ def project_path(project_root, value, location):
 
 
 def relative_project_path(project_root, path):
-    return path.resolve().relative_to(project_root).as_posix()
+    return path.resolve().relative_to(project_root.resolve()).as_posix()
 
 
 def absolute_project_path(project_root, path):
-    return str((project_root / path).resolve())
+    return str((project_root.resolve() / path).resolve())
+
+
+def validate_include_resolution(include_dirs, headers):
+    for header in headers:
+        if Path(header).name.casefold() in GENERATED_HEADER_NAMES:
+            raise ConfigError(f"RTL header conflicts with generated cfg.svh: {header}")
+
+    candidates = {}
+    for include_dir in include_dirs:
+        include_path = Path(include_dir)
+        for header in headers:
+            header_path = Path(header)
+            try:
+                include_name = header_path.relative_to(include_path).as_posix()
+            except ValueError:
+                continue
+            candidates.setdefault(include_name, set()).add(header)
+
+    ambiguities = {
+        include_name: sorted(paths)
+        for include_name, paths in candidates.items()
+        if len(paths) > 1
+    }
+    if ambiguities:
+        details = []
+        for include_name, paths in sorted(ambiguities.items()):
+            details.append(f'  "{include_name}" resolves to:')
+            details.extend(f"    {path}" for path in paths)
+        raise ConfigError("ambiguous RTL include resolution:\n" + "\n".join(details))
 
 
 def discover_rtl_filesets(rtl, project_root):
@@ -172,7 +203,11 @@ def discover_rtl_filesets(rtl, project_root):
                 pattern_location = f"{location}.patterns[{pattern_index}]"
                 try:
                     matches = sorted(
-                        (path.resolve() for path in root.glob(pattern) if path.is_file()),
+                        (
+                            path.resolve()
+                            for path in root.glob(pattern)
+                            if path.is_file()
+                        ),
                         key=lambda path: path.as_posix(),
                     )
                 except ValueError as error:
@@ -196,9 +231,7 @@ def discover_rtl_filesets(rtl, project_root):
         normalized_filesets.append(
             {
                 "name": name,
-                "roots": [
-                    relative_project_path(project_root, root) for root in roots
-                ],
+                "roots": [relative_project_path(project_root, root) for root in roots],
                 "patterns": normalized_patterns,
                 "sources": fileset_sources,
             }
@@ -206,6 +239,7 @@ def discover_rtl_filesets(rtl, project_root):
 
     if not sources:
         raise ConfigError("rtl.filesets: no RTL sources matched")
+    validate_include_resolution(include_dirs, headers)
     return {
         "filesets": normalized_filesets,
         "sources": sources,
@@ -351,9 +385,7 @@ def load_config(config_path, project_root):
 
 def resolved_configuration(config):
     rtl = {
-        key: value
-        for key, value in config["rtl"].items()
-        if key != "discovery_dirs"
+        key: value for key, value in config["rtl"].items() if key != "discovery_dirs"
     }
     return {
         "schema_version": config["schema_version"],
@@ -397,8 +429,7 @@ def render_filelist(config, digest, project_root, output_dir):
         else:
             lines.append(f"+define+{name}={value}")
     lines.extend(
-        absolute_project_path(project_root, path)
-        for path in config["rtl"]["sources"]
+        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     )
     return "\n".join(lines) + "\n"
 
@@ -440,12 +471,8 @@ def render_makefile(config, digest, project_root):
     lint_enabled = "1" if config["flow"]["lint"]["enabled"] else "0"
     lint_tool = make_escape(config["flow"]["lint"]["tool"])
     workflow_stages = " ".join(config["workflow"]["stages"])
-    rtl_sources = " ".join(
-        make_project_path(path) for path in config["rtl"]["sources"]
-    )
-    rtl_headers = " ".join(
-        make_project_path(path) for path in config["rtl"]["headers"]
-    )
+    rtl_sources = " ".join(make_project_path(path) for path in config["rtl"]["sources"])
+    rtl_headers = " ".join(make_project_path(path) for path in config["rtl"]["headers"])
     rtl_discovery_dirs = " ".join(
         make_project_path(path) for path in config["rtl"]["discovery_dirs"]
     )
