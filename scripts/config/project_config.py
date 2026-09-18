@@ -23,7 +23,7 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.2.0"
+GENERATOR_VERSION = "0.3.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
@@ -266,8 +266,8 @@ def load_config(config_path, project_root):
         },
         "<root>",
     )
-    if raw.get("schema_version") != 1:
-        raise ConfigError("schema_version: expected integer 1")
+    if raw.get("schema_version") != 2:
+        raise ConfigError("schema_version: expected integer 2")
 
     parameters = require_table(raw, "parameters")
     normalized_parameters = {}
@@ -327,21 +327,23 @@ def load_config(config_path, project_root):
 
     flow = require_table(raw, "flow")
     reject_unknown(flow, {"lint"}, "flow")
-    lint = flow.get("lint")
+    lint = flow.get("lint", {})
     if not isinstance(lint, dict):
         raise ConfigError("flow.lint: expected a table")
-    reject_unknown(lint, {"enabled", "tool", "options"}, "flow.lint")
-    lint_enabled = require_bool(lint, "enabled", "flow.lint")
-    lint_tool = lint.get("tool")
-    if not isinstance(lint_tool, str):
-        raise ConfigError("flow.lint.tool: expected a string")
-    lint_options = string_list(lint.get("options", []), "flow.lint.options")
-    if lint_enabled and not lint_tool:
-        raise ConfigError("flow.lint.tool: required when lint is enabled")
     supported_lint_tools = {"spyglass", "verilator"}
-    if lint_enabled and lint_tool not in supported_lint_tools:
-        supported = ", ".join(sorted(supported_lint_tools))
-        raise ConfigError(f"flow.lint.tool: supported values are {supported}")
+    reject_unknown(lint, supported_lint_tools, "flow.lint")
+    normalized_lint = {}
+    for tool in sorted(lint):
+        tool_config = lint[tool]
+        location = f"flow.lint.{tool}"
+        if not isinstance(tool_config, dict):
+            raise ConfigError(f"{location}: expected a table")
+        reject_unknown(tool_config, {"options"}, location)
+        normalized_lint[tool] = {
+            "options": string_list(
+                tool_config.get("options", []), f"{location}.options"
+            )
+        }
 
     workflow = require_table(raw, "workflow")
     reject_unknown(workflow, {"stages"}, "workflow")
@@ -351,15 +353,15 @@ def load_config(config_path, project_root):
         raise ConfigError(
             f"workflow.stages: unsupported stage(s): {', '.join(unsupported)}"
         )
-    if "lint" in stages and not lint_enabled:
+    if "lint" in stages and not normalized_lint:
         raise ConfigError(
-            "workflow.stages: lint is listed but flow.lint.enabled is false"
+            "workflow.stages: lint is listed but no flow.lint.<tool> table exists"
         )
     if len(stages) != len(set(stages)):
         raise ConfigError("workflow.stages: duplicate stages are not allowed")
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "parameters": normalized_parameters,
         "rtl": {
             "top": top,
@@ -372,13 +374,7 @@ def load_config(config_path, project_root):
             "required_commands": required_commands,
             "required_variables": required_variables,
         },
-        "flow": {
-            "lint": {
-                "enabled": lint_enabled,
-                "tool": lint_tool,
-                "options": lint_options,
-            }
-        },
+        "flow": {"lint": normalized_lint},
         "workflow": {"stages": stages},
     }
 
@@ -480,8 +476,7 @@ def make_project_path(path):
 
 def render_makefile(config, digest, project_root):
     project_top = make_escape(config["rtl"]["top"])
-    lint_enabled = "1" if config["flow"]["lint"]["enabled"] else "0"
-    lint_tool = make_escape(config["flow"]["lint"]["tool"])
+    lint_tools = " ".join(make_escape(tool) for tool in config["flow"]["lint"])
     workflow_stages = " ".join(config["workflow"]["stages"])
     rtl_sources = " ".join(make_project_path(path) for path in config["rtl"]["sources"])
     rtl_headers = " ".join(make_project_path(path) for path in config["rtl"]["headers"])
@@ -494,8 +489,7 @@ def render_makefile(config, digest, project_root):
             f"GENERATED_PROJECT_ROOT := {make_escape(str(project_root))}\n",
             f"PROJECT_TOP := {project_top}\n",
             f"BUILD_JOBS := {config['build']['jobs']}\n",
-            f"LINT_ENABLED := {lint_enabled}\n",
-            f"LINT_TOOL := {lint_tool}\n",
+            f"LINT_TOOLS := {lint_tools}\n",
             f"WORKFLOW_STAGES := {workflow_stages}\n",
             f"RTL_SOURCES := {rtl_sources}\n",
             f"RTL_HEADERS := {rtl_headers}\n",
@@ -511,22 +505,28 @@ def shell_array(name, values):
 
 
 def render_environment(config, digest):
-    lint = config["flow"]["lint"]
     rtl_top = shlex.quote(config["rtl"]["top"])
     project_python = shlex.quote(config["environment"]["python"])
-    lint_enabled = "1" if lint["enabled"] else "0"
-    lint_tool = shlex.quote(lint["tool"])
-    return "".join(
+    lint = config["flow"]["lint"]
+    lines = [
+        header("#", digest),
+        f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
+        f"RTL_TOP={rtl_top}\n",
+        f"BUILD_JOBS={config['build']['jobs']}\n",
+        f"PROJECT_PYTHON={project_python}\n",
+        f"LINT_TOOL_COUNT={len(lint)}\n",
+        shell_array("LINT_TOOLS", lint),
+    ]
+    for tool, tool_config in lint.items():
+        variable_prefix = f"LINT_{tool.upper()}"
+        lines.extend(
+            [
+                f"{variable_prefix}_OPTION_COUNT={len(tool_config['options'])}\n",
+                shell_array(f"{variable_prefix}_OPTIONS", tool_config["options"]),
+            ]
+        )
+    lines.extend(
         [
-            header("#", digest),
-            f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
-            f"RTL_TOP={rtl_top}\n",
-            f"BUILD_JOBS={config['build']['jobs']}\n",
-            f"PROJECT_PYTHON={project_python}\n",
-            f"LINT_ENABLED={lint_enabled}\n",
-            f"LINT_TOOL={lint_tool}\n",
-            f"LINT_OPTION_COUNT={len(lint['options'])}\n",
-            shell_array("LINT_OPTIONS", lint["options"]),
             shell_array(
                 "PROJECT_REQUIRED_COMMANDS", config["environment"]["required_commands"]
             ),
@@ -538,6 +538,7 @@ def render_environment(config, digest):
             shell_array("WORKFLOW_STAGES", config["workflow"]["stages"]),
         ]
     )
+    return "".join(lines)
 
 
 def render_outputs(config, config_path, project_root, output_dir):

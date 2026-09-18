@@ -14,9 +14,7 @@ PYTHON                ?= $(VENV_PYTHON)
 # Once generated, this list makes additions and removals below an RTL root
 # invalidate configuration without requiring a Project.toml edit.
 ifneq ($(filter config lint workflow,$(MAKECMDGOALS)),)
-ifneq ($(wildcard $(CONFIG_MAKEFILE)),)
-include $(CONFIG_MAKEFILE)
-endif
+-include $(CONFIG_MAKEFILE)
 endif
 RTL_DISCOVERY_DIRS ?=
 CONFIG_RELOCATION_PREREQUISITE :=

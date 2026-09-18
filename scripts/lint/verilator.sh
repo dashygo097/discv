@@ -23,8 +23,8 @@ command=(
   --top-module "${RTL_TOP}"
   --Mdir "${STAGE_WORK_DIR}/verilator"
 )
-if [[ "${LINT_OPTION_COUNT}" -gt 0 ]]; then
-  command+=("${LINT_OPTIONS[@]}")
+if [[ "${LINT_VERILATOR_OPTION_COUNT}" -gt 0 ]]; then
+  command+=("${LINT_VERILATOR_OPTIONS[@]}")
 fi
 command+=(-f "${RTL_FILELIST}")
 

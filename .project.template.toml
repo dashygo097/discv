@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [parameters]
 XLEN = 32
@@ -32,10 +32,9 @@ python = "python3"
 required_commands = ["bash"]
 required_variables = []
 
-[flow.lint]
-enabled = false
-tool = ""
-options = []
+# [flow.lint.spyglass]
+
+# [flow.lint.verilator]
 
 [workflow]
 stages = []

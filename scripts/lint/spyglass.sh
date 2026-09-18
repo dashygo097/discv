@@ -31,8 +31,8 @@ command=(
   -goals lint/lint_rtl
   -batch
 )
-if [[ "${LINT_OPTION_COUNT}" -gt 0 ]]; then
-  command+=("${LINT_OPTIONS[@]}")
+if [[ "${LINT_SPYGLASS_OPTION_COUNT}" -gt 0 ]]; then
+  command+=("${LINT_SPYGLASS_OPTIONS[@]}")
 fi
 
 export RTL_FILELIST RTL_TOP
