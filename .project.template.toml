@@ -1,17 +1,27 @@
 schema_version = 1
 
-[project]
-name = ""
-
 [parameters]
 XLEN = 32
 
 [rtl]
 top = ""
-sources = []
-include_dirs = []
 
 [rtl.defines]
+
+[[rtl.filesets]]
+name = "packages"
+roots = ["rtl/include/pkgs"]
+patterns = ["**/*.sv"]
+
+[[rtl.filesets]]
+name = "design"
+roots = ["rtl/core", "rtl/bus"]
+patterns = ["**/*.sv", "**/*.v"]
+
+[[rtl.filesets]]
+name = "top"
+roots = ["rtl/top"]
+patterns = ["**/*.sv"]
 
 [build]
 jobs = 1

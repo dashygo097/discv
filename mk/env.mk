@@ -1,5 +1,4 @@
-# Python bootstrap. This is intentionally independent of Project.toml because
-# Python is required to parse Project.toml.
+# Python bootstrap
 VENV_DIR          := $(BUILD_DIR)/.venv
 VENV_PYTHON       := $(VENV_DIR)/bin/python
 VENV_STAMP        := $(VENV_DIR)/.ready

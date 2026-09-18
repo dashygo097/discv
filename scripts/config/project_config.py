@@ -23,8 +23,10 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.1.0"
+GENERATOR_VERSION = "0.2.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+RTL_SOURCE_SUFFIXES = {".sv", ".v"}
+RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
 
 
 class ConfigError(Exception):
@@ -64,6 +66,155 @@ def require_bool(table, key, location):
     return value
 
 
+def project_path(project_root, value, location):
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ConfigError(f"{location}: expected a path relative to the project root")
+    resolved = (project_root / path).resolve()
+    if os.path.commonpath([str(project_root), str(resolved)]) != str(project_root):
+        raise ConfigError(f"{location}: path resolves outside the project root")
+    return resolved
+
+
+def relative_project_path(project_root, path):
+    return path.resolve().relative_to(project_root).as_posix()
+
+
+def absolute_project_path(project_root, path):
+    return str((project_root / path).resolve())
+
+
+def discover_rtl_filesets(rtl, project_root):
+    filesets = rtl.get("filesets")
+    if not isinstance(filesets, list) or not filesets:
+        raise ConfigError("rtl.filesets: expected a non-empty array of tables")
+
+    normalized_filesets = []
+    names = set()
+    source_owners = {}
+    sources = []
+    include_dirs = []
+    include_dir_set = set()
+    headers = []
+    header_set = set()
+    discovery_dirs = []
+    discovery_dir_set = set()
+
+    for index, fileset in enumerate(filesets):
+        location = f"rtl.filesets[{index}]"
+        if not isinstance(fileset, dict):
+            raise ConfigError(f"{location}: expected a table")
+        reject_unknown(fileset, {"name", "roots", "patterns"}, location)
+        name = require_string(fileset, "name", location)
+        if not IDENTIFIER.match(name):
+            raise ConfigError(f"{location}.name: expected an identifier")
+        if name in names:
+            raise ConfigError(f"{location}.name: duplicate fileset name: {name}")
+        names.add(name)
+
+        root_names = string_list(fileset.get("roots"), f"{location}.roots")
+        patterns = string_list(fileset.get("patterns"), f"{location}.patterns")
+        if not root_names:
+            raise ConfigError(f"{location}.roots: expected at least one root")
+        if not patterns:
+            raise ConfigError(f"{location}.patterns: expected at least one pattern")
+
+        roots = []
+        for root_index, root_name in enumerate(root_names):
+            root_location = f"{location}.roots[{root_index}]"
+            root = project_path(project_root, root_name, root_location)
+            if not root.is_dir():
+                raise ConfigError(f"{root_location}: directory does not exist: {root}")
+            roots.append(root)
+
+            for directory in [root] + sorted(
+                (path for path in root.rglob("*") if path.is_dir()),
+                key=lambda path: path.as_posix(),
+            ):
+                directory_name = relative_project_path(project_root, directory)
+                if directory_name not in discovery_dir_set:
+                    discovery_dir_set.add(directory_name)
+                    discovery_dirs.append(directory_name)
+
+            header_paths = sorted(
+                (
+                    path.resolve()
+                    for path in root.rglob("*")
+                    if path.is_file() and path.suffix.lower() in RTL_HEADER_SUFFIXES
+                ),
+                key=lambda path: path.as_posix(),
+            )
+            candidate_include_dirs = [root] + [path.parent for path in header_paths]
+            for directory in candidate_include_dirs:
+                directory_name = relative_project_path(project_root, directory)
+                if directory_name not in include_dir_set:
+                    include_dir_set.add(directory_name)
+                    include_dirs.append(directory_name)
+            for header_path in header_paths:
+                header_name = relative_project_path(project_root, header_path)
+                if header_name not in header_set:
+                    header_set.add(header_name)
+                    headers.append(header_name)
+
+        normalized_patterns = []
+        for pattern_index, pattern in enumerate(patterns):
+            pattern_location = f"{location}.patterns[{pattern_index}]"
+            pattern_path = Path(pattern)
+            if not pattern or pattern_path.is_absolute() or ".." in pattern_path.parts:
+                raise ConfigError(
+                    f"{pattern_location}: expected a non-empty relative glob pattern"
+                )
+            normalized_patterns.append(pattern)
+
+        fileset_sources = []
+        for root in roots:
+            for pattern_index, pattern in enumerate(normalized_patterns):
+                pattern_location = f"{location}.patterns[{pattern_index}]"
+                try:
+                    matches = sorted(
+                        (path.resolve() for path in root.glob(pattern) if path.is_file()),
+                        key=lambda path: path.as_posix(),
+                    )
+                except ValueError as error:
+                    raise ConfigError(f"{pattern_location}: invalid glob: {error}")
+                for source in matches:
+                    if source.suffix.lower() not in RTL_SOURCE_SUFFIXES:
+                        raise ConfigError(
+                            f"{pattern_location}: matched unsupported RTL file: {source}"
+                        )
+                    source_name = relative_project_path(project_root, source)
+                    previous_owner = source_owners.get(source_name)
+                    if previous_owner is not None:
+                        raise ConfigError(
+                            f"{source_name}: selected more than once; first selected "
+                            f"by fileset {previous_owner}, then by fileset {name}"
+                        )
+                    source_owners[source_name] = name
+                    sources.append(source_name)
+                    fileset_sources.append(source_name)
+
+        normalized_filesets.append(
+            {
+                "name": name,
+                "roots": [
+                    relative_project_path(project_root, root) for root in roots
+                ],
+                "patterns": normalized_patterns,
+                "sources": fileset_sources,
+            }
+        )
+
+    if not sources:
+        raise ConfigError("rtl.filesets: no RTL sources matched")
+    return {
+        "filesets": normalized_filesets,
+        "sources": sources,
+        "include_dirs": include_dirs,
+        "headers": headers,
+        "discovery_dirs": discovery_dirs,
+    }
+
+
 def load_config(config_path, project_root):
     with config_path.open("rb") as stream:
         raw = tomllib.load(stream)
@@ -72,7 +223,6 @@ def load_config(config_path, project_root):
         raw,
         {
             "schema_version",
-            "project",
             "parameters",
             "rtl",
             "build",
@@ -85,10 +235,6 @@ def load_config(config_path, project_root):
     if raw.get("schema_version") != 1:
         raise ConfigError("schema_version: expected integer 1")
 
-    project = require_table(raw, "project")
-    reject_unknown(project, {"name"}, "project")
-    name = require_string(project, "name", "project")
-
     parameters = require_table(raw, "parameters")
     normalized_parameters = {}
     for key in sorted(parameters):
@@ -100,12 +246,11 @@ def load_config(config_path, project_root):
         normalized_parameters[key] = value
 
     rtl = require_table(raw, "rtl")
-    reject_unknown(rtl, {"top", "sources", "include_dirs", "defines"}, "rtl")
+    reject_unknown(rtl, {"top", "filesets", "defines"}, "rtl")
     top = require_string(rtl, "top", "rtl")
     if not IDENTIFIER.match(top):
         raise ConfigError("rtl.top: invalid SystemVerilog identifier")
-    source_names = string_list(rtl.get("sources", []), "rtl.sources")
-    include_names = string_list(rtl.get("include_dirs", []), "rtl.include_dirs")
+    discovered_rtl = discover_rtl_filesets(rtl, project_root)
     defines = rtl.get("defines", {})
     if not isinstance(defines, dict):
         raise ConfigError("rtl.defines: expected a table")
@@ -120,21 +265,6 @@ def load_config(config_path, project_root):
                 f"rtl.defines.{key}: expected string, integer, or boolean"
             )
         normalized_defines[key] = value
-
-    sources = [(project_root / item).resolve() for item in source_names]
-    include_dirs = [(project_root / item).resolve() for item in include_names]
-    for path in sources:
-        if not path.is_file():
-            raise ConfigError(f"RTL source does not exist: {path}")
-    for path in include_dirs:
-        if not path.is_dir():
-            raise ConfigError(f"RTL include directory does not exist: {path}")
-    headers = sorted(
-        str(path.resolve())
-        for directory in include_dirs
-        for path in directory.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".h", ".vh", ".svh"}
-    )
 
     build = require_table(raw, "build")
     reject_unknown(build, {"jobs"}, "build")
@@ -196,13 +326,10 @@ def load_config(config_path, project_root):
 
     return {
         "schema_version": 1,
-        "project": {"name": name},
         "parameters": normalized_parameters,
         "rtl": {
             "top": top,
-            "sources": [str(path) for path in sources],
-            "include_dirs": [str(path) for path in include_dirs],
-            "headers": headers,
+            **discovered_rtl,
             "defines": normalized_defines,
         },
         "build": {"jobs": jobs},
@@ -222,9 +349,29 @@ def load_config(config_path, project_root):
     }
 
 
+def resolved_configuration(config):
+    rtl = {
+        key: value
+        for key, value in config["rtl"].items()
+        if key != "discovery_dirs"
+    }
+    return {
+        "schema_version": config["schema_version"],
+        "parameters": config["parameters"],
+        "rtl": rtl,
+        "build": config["build"],
+        "environment": config["environment"],
+        "flow": config["flow"],
+        "workflow": config["workflow"],
+    }
+
+
 def config_digest(config):
     encoded = json.dumps(
-        config, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        resolved_configuration(config),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -236,17 +383,23 @@ def header(comment, digest):
     )
 
 
-def render_filelist(config, digest, output_dir):
+def render_filelist(config, digest, project_root, output_dir):
     lines = [header("#", digest).rstrip()]
     lines.append(f"+incdir+{output_dir}")
-    lines.extend(f"+incdir+{path}" for path in config["rtl"]["include_dirs"])
+    lines.extend(
+        f"+incdir+{absolute_project_path(project_root, path)}"
+        for path in config["rtl"]["include_dirs"]
+    )
     for name, value in sorted(config["rtl"]["defines"].items()):
         if isinstance(value, bool):
             if value:
                 lines.append(f"+define+{name}")
         else:
             lines.append(f"+define+{name}={value}")
-    lines.extend(config["rtl"]["sources"])
+    lines.extend(
+        absolute_project_path(project_root, path)
+        for path in config["rtl"]["sources"]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -278,18 +431,28 @@ def make_escape(value):
     return value.replace("$", "$$").replace("#", "\\#")
 
 
-def render_makefile(config, digest):
-    project_name = make_escape(config["project"]["name"])
+def make_project_path(path):
+    return f"$(PROJECT_ROOT)/{make_escape(path)}"
+
+
+def render_makefile(config, digest, project_root):
     project_top = make_escape(config["rtl"]["top"])
     lint_enabled = "1" if config["flow"]["lint"]["enabled"] else "0"
     lint_tool = make_escape(config["flow"]["lint"]["tool"])
     workflow_stages = " ".join(config["workflow"]["stages"])
-    rtl_sources = " ".join(make_escape(path) for path in config["rtl"]["sources"])
-    rtl_headers = " ".join(make_escape(path) for path in config["rtl"]["headers"])
+    rtl_sources = " ".join(
+        make_project_path(path) for path in config["rtl"]["sources"]
+    )
+    rtl_headers = " ".join(
+        make_project_path(path) for path in config["rtl"]["headers"]
+    )
+    rtl_discovery_dirs = " ".join(
+        make_project_path(path) for path in config["rtl"]["discovery_dirs"]
+    )
     return "".join(
         [
             header("#", digest),
-            f"PROJECT_NAME := {project_name}\n",
+            f"GENERATED_PROJECT_ROOT := {make_escape(str(project_root))}\n",
             f"PROJECT_TOP := {project_top}\n",
             f"BUILD_JOBS := {config['build']['jobs']}\n",
             f"LINT_ENABLED := {lint_enabled}\n",
@@ -297,6 +460,7 @@ def render_makefile(config, digest):
             f"WORKFLOW_STAGES := {workflow_stages}\n",
             f"RTL_SOURCES := {rtl_sources}\n",
             f"RTL_HEADERS := {rtl_headers}\n",
+            f"RTL_DISCOVERY_DIRS := {rtl_discovery_dirs}\n",
             f"PROJECT_CONFIG_DIGEST := {digest}\n",
         ]
     )
@@ -309,7 +473,6 @@ def shell_array(name, values):
 
 def render_environment(config, digest):
     lint = config["flow"]["lint"]
-    project_name = shlex.quote(config["project"]["name"])
     rtl_top = shlex.quote(config["rtl"]["top"])
     project_python = shlex.quote(config["environment"]["python"])
     lint_enabled = "1" if lint["enabled"] else "0"
@@ -317,7 +480,6 @@ def render_environment(config, digest):
     return "".join(
         [
             header("#", digest),
-            f"PROJECT_NAME={project_name}\n",
             f"RTL_TOP={rtl_top}\n",
             f"BUILD_JOBS={config['build']['jobs']}\n",
             f"PROJECT_PYTHON={project_python}\n",
@@ -338,27 +500,31 @@ def render_environment(config, digest):
     )
 
 
-def render_outputs(config, config_path, output_dir):
+def render_outputs(config, config_path, project_root, output_dir):
     digest = config_digest(config)
+    resolved = resolved_configuration(config)
     manifest = {
+        **resolved,
         "configuration_digest": digest,
-        "generator_version": GENERATOR_VERSION,
-        "project_file": str(config_path.resolve()),
-        "schema_version": config["schema_version"],
+        "generator": {
+            "name": "project_config.py",
+            "version": GENERATOR_VERSION,
+        },
+        "project_file": relative_project_path(project_root, config_path),
         "outputs": [
+            "cfg.svh",
             "manifest.json",
             "project.env",
             "project.mk",
-            "cfg.svh",
             "rtl.f",
         ],
     }
     return {
         "manifest.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        "project.mk": render_makefile(config, digest),
+        "project.mk": render_makefile(config, digest, project_root),
         "project.env": render_environment(config, digest),
         "cfg.svh": render_svh(config, digest),
-        "rtl.f": render_filelist(config, digest, output_dir),
+        "rtl.f": render_filelist(config, digest, project_root, output_dir),
     }
 
 
@@ -412,7 +578,7 @@ def main():
         if args.output is None:
             raise ConfigError(f"--output is required for {args.command}")
         output_dir = args.output.resolve()
-        outputs = render_outputs(config, config_path, output_dir)
+        outputs = render_outputs(config, config_path, project_root, output_dir)
         if args.command == "generate":
             for name, content in sorted(outputs.items()):
                 atomic_write(output_dir / name, content)

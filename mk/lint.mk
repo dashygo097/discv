@@ -6,11 +6,6 @@ LINT_WORK_DIR   := $(LINT_BUILD_DIR)/work
 
 # Inputs
 LINT_FILELIST := $(RTL_FILELIST)
-ifneq ($(filter lint,$(MAKECMDGOALS)),)
-ifneq ($(wildcard $(CONFIG_MAKEFILE)),)
-include $(CONFIG_MAKEFILE)
-endif
-endif
 RTL_SOURCES ?=
 RTL_HEADERS ?=
 
@@ -24,7 +19,8 @@ LINT_STAMP  := $(LINT_BUILD_DIR)/.done
 
 lint: $(LINT_STAMP)
 
-$(LINT_STAMP): $(LINT_FILELIST) $(PROJECT_ENV) $(RTL_SOURCES) $(RTL_HEADERS) \
+$(LINT_STAMP): $(LINT_FILELIST) $(PROJECT_ENV) $(wildcard $(RTL_SOURCES)) \
+		$(wildcard $(RTL_HEADERS)) \
 		$(wildcard $(SCRIPT_DIR)/lint/*) $(SCRIPT_DIR)/common/check_env.sh
 	@echo "[LINT] Running RTL lint"
 	@$(MKDIR) $(LINT_LOG_DIR)

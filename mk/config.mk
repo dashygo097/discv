@@ -11,11 +11,32 @@ CONFIG_OUTPUTS        := $(RTL_FILELIST) $(CONFIG_MAKEFILE) $(CONFIG_SVH) \
 CONFIG_STAMP          := $(GENERATED_DIR)/.done
 PYTHON                ?= $(VENV_PYTHON)
 
+# Once generated, this list makes additions and removals below an RTL root
+# invalidate configuration without requiring a Project.toml edit.
+ifneq ($(filter config lint workflow,$(MAKECMDGOALS)),)
+ifneq ($(wildcard $(CONFIG_MAKEFILE)),)
+include $(CONFIG_MAKEFILE)
+endif
+endif
+RTL_DISCOVERY_DIRS ?=
+CONFIG_RELOCATION_PREREQUISITE :=
+
+# Generated tool inputs may contain absolute paths. Regenerate them after a
+# checkout is moved, and discard stale discovery paths before Make uses them.
+ifneq ($(GENERATED_PROJECT_ROOT),$(PROJECT_ROOT))
+RTL_DISCOVERY_DIRS :=
+CONFIG_RELOCATION_PREREQUISITE := config-relocated
+.PHONY: config-relocated
+config-relocated:
+endif
+
 .PHONY: config config-clean
 
 config: $(CONFIG_OUTPUTS)
 
-$(CONFIG_STAMP): $(VENV_STAMP) $(PROJECT_CONFIG) $(PROJECT_CONFIG_SCRIPT) $(PROJECT_CONFIG_RUNNER) \
+$(CONFIG_STAMP): $(CONFIG_RELOCATION_PREREQUISITE) $(VENV_STAMP) $(PROJECT_CONFIG) \
+		$(PROJECT_CONFIG_SCRIPT) $(PROJECT_CONFIG_RUNNER) \
+		$(RTL_DISCOVERY_DIRS) \
 		$(SCRIPT_DIR)/common/check_env.sh
 	@echo "[CONFIG] Generating project configuration"
 	@$(MKDIR) $(GENERATED_DIR)
