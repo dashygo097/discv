@@ -507,6 +507,7 @@ def render_environment(config, digest):
     return "".join(
         [
             header("#", digest),
+            f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
             f"RTL_TOP={rtl_top}\n",
             f"BUILD_JOBS={config['build']['jobs']}\n",
             f"PROJECT_PYTHON={project_python}\n",

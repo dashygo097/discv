@@ -6,26 +6,26 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}
 source "${PROJECT_ROOT}/scripts/common/check_env.sh"
 
-require_var FILELIST
+require_var RTL_FILELIST
 require_var PROJECT_ENV
-require_var BUILD_DIR
-require_file "${FILELIST}"
+require_var STAGE_WORK_DIR
+require_file "${RTL_FILELIST}"
 require_file "${PROJECT_ENV}"
 
 # shellcheck source=/dev/null
 source "${PROJECT_ENV}"
 require_cmd verilator
+verilator --version >"${STAGE_WORK_DIR}/tool-version.txt" 2>/dev/null || true
 
 command=(
   verilator
   --lint-only
   --top-module "${RTL_TOP}"
-  --Mdir "${BUILD_DIR}/work"
+  --Mdir "${STAGE_WORK_DIR}/verilator"
 )
 if [[ "${LINT_OPTION_COUNT}" -gt 0 ]]; then
   command+=("${LINT_OPTIONS[@]}")
 fi
-command+=(-f "${FILELIST}")
+command+=(-f "${RTL_FILELIST}")
 
-"${command[@]}" 2>&1 | tee "${BUILD_DIR}/logs/lint.log"
-cp "${BUILD_DIR}/logs/lint.log" "${BUILD_DIR}/reports/lint.rpt"
+"${command[@]}"

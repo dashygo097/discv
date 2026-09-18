@@ -1,39 +1,33 @@
-# Lint directories
-LINT_BUILD_DIR  := $(BUILD_DIR)/lint
-LINT_LOG_DIR    := $(LINT_BUILD_DIR)/logs
-LINT_REPORT_DIR := $(LINT_BUILD_DIR)/reports
-LINT_WORK_DIR   := $(LINT_BUILD_DIR)/work
+# Lint stage
+LINT_BUILD_DIR := $(BUILD_DIR)/lint
 
 # Inputs
 LINT_FILELIST := $(RTL_FILELIST)
 RTL_SOURCES ?=
 RTL_HEADERS ?=
 
-# Outputs
-LINT_LOG    := $(LINT_LOG_DIR)/lint.log
-LINT_REPORT := $(LINT_REPORT_DIR)/lint.rpt
-LINT_STAMP  := $(LINT_BUILD_DIR)/.done
+LINT_STAMP := $(LINT_BUILD_DIR)/.done
 
 # Targets
 .PHONY: lint lint-clean
 
 lint: $(LINT_STAMP)
 
-$(LINT_STAMP): $(LINT_FILELIST) $(PROJECT_ENV) $(wildcard $(RTL_SOURCES)) \
+$(LINT_STAMP): $(LINT_FILELIST) $(PROJECT_ENV) $(CONFIG_MANIFEST) \
+		$(wildcard $(RTL_SOURCES)) \
 		$(wildcard $(RTL_HEADERS)) \
-		$(wildcard $(SCRIPT_DIR)/lint/*) $(SCRIPT_DIR)/common/check_env.sh
+		$(wildcard $(SCRIPT_DIR)/lint/*) $(SCRIPT_DIR)/common/check_env.sh \
+		$(SCRIPT_DIR)/common/stage.sh $(SCRIPT_DIR)/common/write_run_manifest.py
 	@echo "[LINT] Running RTL lint"
-	@$(MKDIR) $(LINT_LOG_DIR)
-	@$(MKDIR) $(LINT_REPORT_DIR)
-	@$(MKDIR) $(LINT_WORK_DIR)
-
 	@PROJECT_ROOT=$(PROJECT_ROOT) \
-	FILELIST=$(LINT_FILELIST) \
 	PROJECT_ENV=$(PROJECT_ENV) \
-	BUILD_DIR=$(LINT_BUILD_DIR) \
+	CONFIG_MANIFEST=$(CONFIG_MANIFEST) \
+	RTL_FILELIST=$(LINT_FILELIST) \
+	STAGE_NAME=lint \
+	STAGE_BUILD_DIR=$(LINT_BUILD_DIR) \
+	PYTHON=$(VENV_PYTHON) \
 	$(SCRIPT_DIR)/lint/run.sh
-
-	@touch $@
+	@test -f "$@"
 
 lint-clean:
 	@echo "[CLEAN] lint"
