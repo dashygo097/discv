@@ -2,6 +2,8 @@ module cpu
   import riscv_pkg::*;
   import core_types_pkg::*;
 (
+    input  logic         clk_i,
+    input  logic         rst_n_i,
     input  instr_t       instr_i,
     input  addr_t        pc_i,
     input  word_t        rs1_data_i,

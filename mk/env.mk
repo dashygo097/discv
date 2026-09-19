@@ -8,11 +8,8 @@ BOOTSTRAP_PYTHON  ?= python3
 
 .PHONY: env
 
-env: $(VENV_STAMP)
-
-$(VENV_STAMP): $(VENV_SETUP_SCRIPT) $(VENV_REQUIREMENTS) \
-		$(SCRIPT_DIR)/common/check_env.sh
+env:
 	@PYTHON_BIN=$(BOOTSTRAP_PYTHON) \
 	PROJECT_VENV_DIR=$(VENV_DIR) \
 	$(VENV_SETUP_SCRIPT)
-	@touch $@
+	@touch $(VENV_STAMP)

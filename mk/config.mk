@@ -6,14 +6,15 @@ CONFIG_MANIFEST       := $(GENERATED_DIR)/manifest.json
 CONFIG_MAKEFILE       := $(GENERATED_DIR)/project.mk
 CONFIG_SVH            := $(GENERATED_DIR)/cfg.svh
 PROJECT_ENV           := $(GENERATED_DIR)/project.env
-CONFIG_OUTPUTS        := $(RTL_FILELIST) $(CONFIG_MAKEFILE) $(CONFIG_SVH) \
+CONFIG_OUTPUTS        := $(RTL_FILELIST) $(RTL_TCL) $(CONSTRAINTS_SDC) \
+		$(SYNTH_DC_CONFIG) $(CONFIG_MAKEFILE) $(CONFIG_SVH) \
 		$(PROJECT_ENV) $(CONFIG_MANIFEST)
 CONFIG_STAMP          := $(GENERATED_DIR)/.done
 PYTHON                ?= $(VENV_PYTHON)
 
 # Once generated, this list makes additions and removals below an RTL root
 # invalidate configuration without requiring a Project.toml edit.
-ifneq ($(filter config lint workflow,$(MAKECMDGOALS)),)
+ifneq ($(filter config lint synth workflow,$(MAKECMDGOALS)),)
 -include $(CONFIG_MAKEFILE)
 endif
 RTL_DISCOVERY_DIRS ?=
@@ -32,10 +33,10 @@ endif
 
 config: $(CONFIG_OUTPUTS)
 
-$(CONFIG_STAMP): $(CONFIG_RELOCATION_PREREQUISITE) $(VENV_STAMP) $(PROJECT_CONFIG) \
+$(CONFIG_STAMP): $(CONFIG_RELOCATION_PREREQUISITE) $(PROJECT_CONFIG) \
 		$(PROJECT_CONFIG_SCRIPT) $(PROJECT_CONFIG_RUNNER) \
 		$(RTL_DISCOVERY_DIRS) \
-		$(SCRIPT_DIR)/common/check_env.sh
+		$(SCRIPT_DIR)/common/check_env.sh | env
 	@echo "[CONFIG] Generating project configuration"
 	@$(MKDIR) $(GENERATED_DIR)
 	@PROJECT_ROOT=$(PROJECT_ROOT) \

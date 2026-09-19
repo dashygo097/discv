@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -23,7 +24,7 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.3.0"
+GENERATOR_VERSION = "0.4.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
@@ -65,6 +66,39 @@ def require_bool(table, key, location):
     if not isinstance(value, bool):
         raise ConfigError(f"{location}.{key}: expected a boolean")
     return value
+
+
+def number(value, location, *, positive=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{location}: expected a number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ConfigError(f"{location}: expected a finite number")
+    if positive and normalized <= 0:
+        raise ConfigError(f"{location}: expected a positive number")
+    if not positive and normalized < 0:
+        raise ConfigError(f"{location}: expected a non-negative number")
+    return normalized
+
+
+def optional_number(table, key, location, *, positive=False):
+    if key not in table:
+        return None
+    return number(table[key], f"{location}.{key}", positive=positive)
+
+
+def configuration_path(project_root, value, location, suffix=None):
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{location}: expected a non-empty path string")
+    if "$" in value:
+        raise ConfigError(f"{location}: environment-variable expansion is not supported")
+    path = Path(value)
+    if not path.is_absolute():
+        path = project_root / path
+    normalized = path.resolve()
+    if suffix is not None and normalized.suffix.lower() != suffix:
+        raise ConfigError(f"{location}: expected a {suffix} file: {value}")
+    return str(normalized)
 
 
 def project_path(project_root, value, location):
@@ -249,6 +283,239 @@ def discover_rtl_filesets(rtl, project_root):
     }
 
 
+def normalize_clock(clock, location, *, virtual):
+    if not isinstance(clock, dict):
+        raise ConfigError(f"{location}: expected a table")
+    reject_unknown(
+        clock,
+        {
+            "name",
+            "period",
+            "waveform",
+            "setup_uncertainty",
+            "hold_uncertainty",
+            "transition",
+        },
+        location,
+    )
+    name = require_string(clock, "name", location)
+    if not IDENTIFIER.match(name):
+        raise ConfigError(f"{location}.name: expected an identifier")
+    period = number(clock.get("period"), f"{location}.period", positive=True)
+    waveform = clock.get("waveform", [0.0, period / 2.0])
+    if not isinstance(waveform, list) or len(waveform) != 2:
+        raise ConfigError(f"{location}.waveform: expected an array of two numbers")
+    waveform = [
+        number(value, f"{location}.waveform[{index}]")
+        for index, value in enumerate(waveform)
+    ]
+    if not 0 <= waveform[0] < waveform[1] <= period:
+        raise ConfigError(
+            f"{location}.waveform: expected 0 <= rise < fall <= period"
+        )
+    normalized = {
+        "name": name,
+        "period": period,
+        "waveform": waveform,
+        "virtual": virtual,
+    }
+    for key in ("setup_uncertainty", "hold_uncertainty", "transition"):
+        value = optional_number(clock, key, location)
+        if value is not None:
+            normalized[key] = value
+    return normalized
+
+
+def normalize_port_constraints(entries, location, clock_names, value_keys):
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ConfigError(f"{location}: expected an array of tables")
+    normalized = []
+    for index, entry in enumerate(entries):
+        entry_location = f"{location}[{index}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{entry_location}: expected a table")
+        allowed = {"ports"} | set(value_keys)
+        reject_unknown(entry, allowed, entry_location)
+        ports = string_list(entry.get("ports"), f"{entry_location}.ports")
+        if not ports or any(not port for port in ports):
+            raise ConfigError(f"{entry_location}.ports: expected non-empty patterns")
+        item = {"ports": ports}
+        if "clock" in value_keys:
+            clock = require_string(entry, "clock", entry_location)
+            if clock not in clock_names:
+                raise ConfigError(
+                    f"{entry_location}.clock: undefined clock: {clock}"
+                )
+            item["clock"] = clock
+        value_count = 0
+        for key in value_keys:
+            if key == "clock":
+                continue
+            value = optional_number(entry, key, entry_location)
+            if value is not None:
+                item[key] = value
+                value_count += 1
+        if value_count == 0:
+            names = ", ".join(key for key in value_keys if key != "clock")
+            raise ConfigError(
+                f"{entry_location}: expected at least one of: {names}"
+            )
+        normalized.append(item)
+    return normalized
+
+
+def normalize_constraints(raw):
+    constraints = raw.get("constraints", {})
+    if not isinstance(constraints, dict):
+        raise ConfigError("constraints: expected a table")
+    reject_unknown(
+        constraints,
+        {
+            "clocks",
+            "virtual_clocks",
+            "input_delays",
+            "output_delays",
+            "input_transitions",
+            "output_loads",
+            "design_rules",
+        },
+        "constraints",
+    )
+
+    clocks = []
+    names = set()
+    for key, virtual in (("clocks", False), ("virtual_clocks", True)):
+        entries = constraints.get(key, [])
+        if not isinstance(entries, list):
+            raise ConfigError(f"constraints.{key}: expected an array of tables")
+        for index, entry in enumerate(entries):
+            location = f"constraints.{key}[{index}]"
+            clock = normalize_clock(entry, location, virtual=virtual)
+            if clock["name"] in names:
+                raise ConfigError(f"{location}.name: duplicate clock: {clock['name']}")
+            names.add(clock["name"])
+            clocks.append(clock)
+
+    design_rules = constraints.get("design_rules", {})
+    if not isinstance(design_rules, dict):
+        raise ConfigError("constraints.design_rules: expected a table")
+    reject_unknown(
+        design_rules,
+        {"max_transition", "max_fanout", "max_capacitance"},
+        "constraints.design_rules",
+    )
+    normalized_rules = {}
+    for key in sorted(design_rules):
+        normalized_rules[key] = number(
+            design_rules[key], f"constraints.design_rules.{key}", positive=True
+        )
+
+    return {
+        "clocks": clocks,
+        "input_delays": normalize_port_constraints(
+            constraints.get("input_delays"),
+            "constraints.input_delays",
+            names,
+            ("clock", "max", "min"),
+        ),
+        "output_delays": normalize_port_constraints(
+            constraints.get("output_delays"),
+            "constraints.output_delays",
+            names,
+            ("clock", "max", "min"),
+        ),
+        "input_transitions": normalize_port_constraints(
+            constraints.get("input_transitions"),
+            "constraints.input_transitions",
+            names,
+            ("rise", "fall"),
+        ),
+        "output_loads": normalize_port_constraints(
+            constraints.get("output_loads"),
+            "constraints.output_loads",
+            names,
+            ("capacitance",),
+        ),
+        "design_rules": normalized_rules,
+    }
+
+
+def normalize_dc_synthesis(dc, project_root):
+    location = "flow.synth.dc"
+    if not isinstance(dc, dict):
+        raise ConfigError(f"{location}: expected a table")
+    reject_unknown(
+        dc,
+        {
+            "target_libraries",
+            "link_libraries",
+            "synthetic_libraries",
+            "min_libraries",
+            "compile",
+            "options",
+        },
+        location,
+    )
+
+    def libraries(key, suffix):
+        values = string_list(dc.get(key, []), f"{location}.{key}")
+        return [
+            configuration_path(
+                project_root, value, f"{location}.{key}[{index}]", suffix
+            )
+            for index, value in enumerate(values)
+        ]
+
+    target_libraries = libraries("target_libraries", ".db")
+    if not target_libraries:
+        raise ConfigError(f"{location}.target_libraries: expected at least one library")
+    link_libraries = libraries("link_libraries", ".db")
+    synthetic_libraries = libraries("synthetic_libraries", ".sldb")
+
+    compile_mode = dc.get("compile", "ultra")
+    if compile_mode not in {"standard", "ultra"}:
+        raise ConfigError(f'{location}.compile: expected "standard" or "ultra"')
+
+    min_libraries = dc.get("min_libraries", [])
+    if not isinstance(min_libraries, list):
+        raise ConfigError(f"{location}.min_libraries: expected an array of tables")
+    normalized_pairs = []
+    known_max_libraries = set(target_libraries + link_libraries)
+    for index, pair in enumerate(min_libraries):
+        pair_location = f"{location}.min_libraries[{index}]"
+        if not isinstance(pair, dict):
+            raise ConfigError(f"{pair_location}: expected a table")
+        reject_unknown(pair, {"max", "min"}, pair_location)
+        maximum = configuration_path(
+            project_root,
+            require_string(pair, "max", pair_location),
+            f"{pair_location}.max",
+            ".db",
+        )
+        minimum = configuration_path(
+            project_root,
+            require_string(pair, "min", pair_location),
+            f"{pair_location}.min",
+            ".db",
+        )
+        if maximum not in known_max_libraries:
+            raise ConfigError(
+                f"{pair_location}.max: expected a target or link library"
+            )
+        normalized_pairs.append({"max": maximum, "min": minimum})
+
+    return {
+        "target_libraries": target_libraries,
+        "link_libraries": link_libraries,
+        "synthetic_libraries": synthetic_libraries,
+        "min_libraries": normalized_pairs,
+        "compile": compile_mode,
+        "options": string_list(dc.get("options", []), f"{location}.options"),
+    }
+
+
 def load_config(config_path, project_root):
     with config_path.open("rb") as stream:
         raw = tomllib.load(stream)
@@ -261,13 +528,14 @@ def load_config(config_path, project_root):
             "rtl",
             "build",
             "environment",
+            "constraints",
             "flow",
             "workflow",
         },
         "<root>",
     )
-    if raw.get("schema_version") != 2:
-        raise ConfigError("schema_version: expected integer 2")
+    if raw.get("schema_version") != 3:
+        raise ConfigError("schema_version: expected integer 3")
 
     parameters = require_table(raw, "parameters")
     normalized_parameters = {}
@@ -309,10 +577,9 @@ def load_config(config_path, project_root):
     environment = require_table(raw, "environment")
     reject_unknown(
         environment,
-        {"python", "required_commands", "required_variables"},
+        {"required_commands", "required_variables"},
         "environment",
     )
-    python = require_string(environment, "python", "environment")
     required_commands = string_list(
         environment.get("required_commands", []), "environment.required_commands"
     )
@@ -328,7 +595,7 @@ def load_config(config_path, project_root):
     flow = raw.get("flow", {})
     if not isinstance(flow, dict):
         raise ConfigError("flow: expected a table")
-    reject_unknown(flow, {"lint"}, "flow")
+    reject_unknown(flow, {"lint", "synth"}, "flow")
     lint = flow.get("lint", {})
     if not isinstance(lint, dict):
         raise ConfigError("flow.lint: expected a table")
@@ -347,10 +614,21 @@ def load_config(config_path, project_root):
             )
         }
 
+    synth = flow.get("synth", {})
+    if not isinstance(synth, dict):
+        raise ConfigError("flow.synth: expected a table")
+    supported_synth_tools = {"dc"}
+    reject_unknown(synth, supported_synth_tools, "flow.synth")
+    normalized_synth = {}
+    if "dc" in synth:
+        normalized_synth["dc"] = normalize_dc_synthesis(synth["dc"], project_root)
+
+    constraints = normalize_constraints(raw)
+
     workflow = require_table(raw, "workflow")
     reject_unknown(workflow, {"stages"}, "workflow")
     stages = string_list(workflow.get("stages", []), "workflow.stages")
-    unsupported = sorted(set(stages) - {"lint"})
+    unsupported = sorted(set(stages) - {"lint", "synth"})
     if unsupported:
         raise ConfigError(
             f"workflow.stages: unsupported stage(s): {', '.join(unsupported)}"
@@ -359,11 +637,15 @@ def load_config(config_path, project_root):
         raise ConfigError(
             "workflow.stages: lint is listed but no flow.lint.<tool> table exists"
         )
+    if "synth" in stages and not normalized_synth:
+        raise ConfigError(
+            "workflow.stages: synth is listed but no flow.synth.<tool> table exists"
+        )
     if len(stages) != len(set(stages)):
         raise ConfigError("workflow.stages: duplicate stages are not allowed")
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "parameters": normalized_parameters,
         "rtl": {
             "top": top,
@@ -372,11 +654,11 @@ def load_config(config_path, project_root):
         },
         "build": {"jobs": jobs},
         "environment": {
-            "python": python,
             "required_commands": required_commands,
             "required_variables": required_variables,
         },
-        "flow": {"lint": normalized_lint},
+        "constraints": constraints,
+        "flow": {"lint": normalized_lint, "synth": normalized_synth},
         "workflow": {"stages": stages},
     }
 
@@ -391,6 +673,7 @@ def resolved_configuration(config):
         "rtl": rtl,
         "build": config["build"],
         "environment": config["environment"],
+        "constraints": config["constraints"],
         "flow": config["flow"],
         "workflow": config["workflow"],
     }
@@ -468,6 +751,180 @@ def render_svh(config, digest):
     return "\n".join(lines) + "\n"
 
 
+def tcl_braced(value):
+    value = str(value)
+    if "{" in value or "}" in value or "\n" in value or "\r" in value:
+        raise ConfigError(f"value cannot be represented safely in generated Tcl: {value!r}")
+    return "{" + value + "}"
+
+
+def tcl_list(values):
+    return "[list " + " ".join(tcl_braced(value) for value in values) + "]"
+
+
+def format_number(value):
+    return format(value, ".15g")
+
+
+def render_rtl_tcl(config, digest, project_root, output_dir):
+    defines = []
+    for name, value in sorted(config["rtl"]["defines"].items()):
+        if isinstance(value, bool):
+            if value:
+                defines.append(name)
+        else:
+            defines.append(f"{name}={value}")
+    sources = [
+        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
+    ]
+    include_dirs = [str(output_dir)] + [
+        absolute_project_path(project_root, path)
+        for path in config["rtl"]["include_dirs"]
+    ]
+    return "".join(
+        [
+            header("#", digest),
+            f"set RTL_TOP {tcl_braced(config['rtl']['top'])}\n",
+            f"set RTL_SOURCES {tcl_list(sources)}\n",
+            f"set RTL_INCLUDE_DIRS {tcl_list(include_dirs)}\n",
+            f"set RTL_DEFINES {tcl_list(defines)}\n",
+        ]
+    )
+
+
+def render_constraints_sdc(config, digest):
+    constraints = config["constraints"]
+    lines = [header("#", digest).rstrip()]
+    lines.extend(
+        [
+            "proc project_require_ports {patterns context} {",
+            "  set objects [get_ports -quiet $patterns]",
+            "  if {[sizeof_collection $objects] == 0} {",
+            '    error "constraint selector resolved to no ports: $context"',
+            "  }",
+            "  return $objects",
+            "}",
+        ]
+    )
+
+    for clock in constraints["clocks"]:
+        name = clock["name"]
+        period = format_number(clock["period"])
+        waveform = " ".join(format_number(value) for value in clock["waveform"])
+        if clock["virtual"]:
+            lines.append(
+                f"create_clock -name {tcl_braced(name)} -period {period} "
+                f"-waveform {{{waveform}}}"
+            )
+        else:
+            lines.extend(
+                [
+                    f"set project_clock_port [get_ports -quiet {tcl_list([name])}]",
+                    "if {[sizeof_collection $project_clock_port] != 1} {",
+                    f"  error {tcl_braced('physical clock must resolve to exactly one port: ' + name)}",
+                    "}",
+                    f"create_clock -name {tcl_braced(name)} -period {period} "
+                    f"-waveform {{{waveform}}} $project_clock_port",
+                    "unset project_clock_port",
+                ]
+            )
+        clock_collection = f"[get_clocks {tcl_list([name])}]"
+        if "setup_uncertainty" in clock:
+            lines.append(
+                "set_clock_uncertainty -setup "
+                f"{format_number(clock['setup_uncertainty'])} {clock_collection}"
+            )
+        if "hold_uncertainty" in clock:
+            lines.append(
+                "set_clock_uncertainty -hold "
+                f"{format_number(clock['hold_uncertainty'])} {clock_collection}"
+            )
+        if "transition" in clock:
+            lines.append(
+                f"set_clock_transition {format_number(clock['transition'])} "
+                f"{clock_collection}"
+            )
+
+    for kind in ("input", "output"):
+        for entry in constraints[f"{kind}_delays"]:
+            ports = tcl_list(entry["ports"])
+            context = f"{kind}_delays: {', '.join(entry['ports'])}"
+            lines.append(
+                f"set project_ports [project_require_ports {ports} {tcl_braced(context)}]"
+            )
+            for bound in ("max", "min"):
+                if bound in entry:
+                    lines.append(
+                        f"set_{kind}_delay -{bound} {format_number(entry[bound])} "
+                        f"-clock [get_clocks {tcl_list([entry['clock']])}] $project_ports"
+                    )
+            lines.append("unset project_ports")
+
+    for entry in constraints["input_transitions"]:
+        ports = tcl_list(entry["ports"])
+        context = f"input_transitions: {', '.join(entry['ports'])}"
+        lines.append(
+            f"set project_ports [project_require_ports {ports} {tcl_braced(context)}]"
+        )
+        for edge in ("rise", "fall"):
+            if edge in entry:
+                lines.append(
+                    f"set_input_transition -{edge} {format_number(entry[edge])} $project_ports"
+                )
+        lines.append("unset project_ports")
+
+    for entry in constraints["output_loads"]:
+        ports = tcl_list(entry["ports"])
+        context = f"output_loads: {', '.join(entry['ports'])}"
+        lines.extend(
+            [
+                f"set project_ports [project_require_ports {ports} {tcl_braced(context)}]",
+                f"set_load {format_number(entry['capacitance'])} $project_ports",
+                "unset project_ports",
+            ]
+        )
+
+    rule_commands = {
+        "max_transition": "set_max_transition",
+        "max_fanout": "set_max_fanout",
+        "max_capacitance": "set_max_capacitance",
+    }
+    for name, command in rule_commands.items():
+        if name in constraints["design_rules"]:
+            lines.append(
+                f"{command} {format_number(constraints['design_rules'][name])} "
+                "[current_design]"
+            )
+    lines.append("rename project_require_ports {}")
+    return "\n".join(lines) + "\n"
+
+
+def render_dc_tcl(config, digest):
+    dc = config["flow"]["synth"].get("dc")
+    if dc is None:
+        dc = {
+            "target_libraries": [],
+            "link_libraries": [],
+            "synthetic_libraries": [],
+            "min_libraries": [],
+            "compile": "ultra",
+        }
+    pairs = [
+        f"[list {tcl_braced(pair['max'])} {tcl_braced(pair['min'])}]"
+        for pair in dc["min_libraries"]
+    ]
+    return "".join(
+        [
+            header("#", digest),
+            f"set SYNTH_TARGET_LIBRARIES {tcl_list(dc['target_libraries'])}\n",
+            f"set SYNTH_LINK_LIBRARIES {tcl_list(dc['link_libraries'])}\n",
+            f"set SYNTH_SYNTHETIC_LIBRARIES {tcl_list(dc['synthetic_libraries'])}\n",
+            "set SYNTH_MIN_LIBRARY_PAIRS [list " + " ".join(pairs) + "]\n",
+            f"set SYNTH_COMPILE {tcl_braced(dc['compile'])}\n",
+        ]
+    )
+
+
 def make_escape(value):
     return value.replace("$", "$$").replace("#", "\\#")
 
@@ -479,6 +936,7 @@ def make_project_path(path):
 def render_makefile(config, digest, project_root):
     project_top = make_escape(config["rtl"]["top"])
     lint_tools = " ".join(make_escape(tool) for tool in config["flow"]["lint"])
+    synth_tools = " ".join(make_escape(tool) for tool in config["flow"]["synth"])
     workflow_stages = " ".join(config["workflow"]["stages"])
     rtl_sources = " ".join(make_project_path(path) for path in config["rtl"]["sources"])
     rtl_headers = " ".join(make_project_path(path) for path in config["rtl"]["headers"])
@@ -492,6 +950,7 @@ def render_makefile(config, digest, project_root):
             f"PROJECT_TOP := {project_top}\n",
             f"BUILD_JOBS := {config['build']['jobs']}\n",
             f"LINT_TOOLS := {lint_tools}\n",
+            f"SYNTH_TOOLS := {synth_tools}\n",
             f"WORKFLOW_STAGES := {workflow_stages}\n",
             f"RTL_SOURCES := {rtl_sources}\n",
             f"RTL_HEADERS := {rtl_headers}\n",
@@ -508,14 +967,13 @@ def shell_array(name, values):
 
 def render_environment(config, digest):
     rtl_top = shlex.quote(config["rtl"]["top"])
-    project_python = shlex.quote(config["environment"]["python"])
     lint = config["flow"]["lint"]
+    synth = config["flow"]["synth"]
     lines = [
         header("#", digest),
         f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
         f"RTL_TOP={rtl_top}\n",
         f"BUILD_JOBS={config['build']['jobs']}\n",
-        f"PROJECT_PYTHON={project_python}\n",
         f"LINT_TOOL_COUNT={len(lint)}\n",
         shell_array("LINT_TOOLS", lint),
     ]
@@ -525,6 +983,20 @@ def render_environment(config, digest):
             [
                 f"{variable_prefix}_OPTION_COUNT={len(tool_config['options'])}\n",
                 shell_array(f"{variable_prefix}_OPTIONS", tool_config["options"]),
+            ]
+        )
+    lines.extend(
+        [
+            f"SYNTH_TOOL_COUNT={len(synth)}\n",
+            shell_array("SYNTH_TOOLS", synth),
+        ]
+    )
+    if "dc" in synth:
+        dc = synth["dc"]
+        lines.extend(
+            [
+                f"SYNTH_DC_OPTION_COUNT={len(dc['options'])}\n",
+                shell_array("SYNTH_DC_OPTIONS", dc["options"]),
             ]
         )
     lines.extend(
@@ -556,10 +1028,13 @@ def render_outputs(config, config_path, project_root, output_dir):
         "project_file": relative_project_path(project_root, config_path),
         "outputs": [
             "cfg.svh",
+            "constraints.sdc",
             "manifest.json",
             "project.env",
             "project.mk",
             "rtl.f",
+            "rtl.tcl",
+            "synth.dc.tcl",
         ],
     }
     return {
@@ -567,7 +1042,10 @@ def render_outputs(config, config_path, project_root, output_dir):
         "project.mk": render_makefile(config, digest, project_root),
         "project.env": render_environment(config, digest),
         "cfg.svh": render_svh(config, digest),
+        "constraints.sdc": render_constraints_sdc(config, digest),
         "rtl.f": render_filelist(config, digest, project_root, output_dir),
+        "rtl.tcl": render_rtl_tcl(config, digest, project_root, output_dir),
+        "synth.dc.tcl": render_dc_tcl(config, digest),
     }
 
 

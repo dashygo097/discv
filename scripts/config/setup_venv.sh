@@ -14,8 +14,16 @@ require_python_version "${PYTHON_BIN}" 3 6
 require_file "${REQUIREMENTS}"
 
 if [[ -e "${VENV_DIR}" && ! -x "${VENV_DIR}/bin/python" ]]; then
-  echo "ERROR: path exists but is not a Python virtual environment: ${VENV_DIR}" >&2
-  exit 1
+  case "${VENV_DIR}" in
+    "${PROJECT_ROOT}"/build/.venv)
+      echo "[VENV] Removing incomplete generated environment: ${VENV_DIR}"
+      rm -rf -- "${VENV_DIR}"
+      ;;
+    *)
+      echo "ERROR: refusing to replace virtual environment outside the expected build path: ${VENV_DIR}" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
@@ -37,10 +45,17 @@ if ! "${VENV_PYTHON}" -m pip --version >/dev/null 2>&1; then
   "${VENV_PYTHON}" -m ensurepip
 fi
 
-echo "[VENV] Installing ${REQUIREMENTS}"
-"${VENV_PYTHON}" -m pip install \
-  --disable-pip-version-check \
-  --requirement "${REQUIREMENTS}"
+if "${VENV_PYTHON}" -m pip install \
+    --disable-pip-version-check \
+    --no-index \
+    --requirement "${REQUIREMENTS}" >/dev/null 2>&1; then
+  echo "[VENV] Dependencies are current"
+else
+  echo "[VENV] Installing ${REQUIREMENTS}"
+  "${VENV_PYTHON}" -m pip install \
+    --disable-pip-version-check \
+    --requirement "${REQUIREMENTS}"
+fi
 
 echo "[VENV] Ready"
 echo "[VENV] Python: $("${VENV_PYTHON}" --version 2>&1)"

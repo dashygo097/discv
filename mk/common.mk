@@ -11,6 +11,9 @@ SCRIPT_DIR      := $(PROJECT_ROOT)/scripts
 
 # Generated from Project.toml
 RTL_FILELIST := $(GENERATED_DIR)/rtl.f
+RTL_TCL := $(GENERATED_DIR)/rtl.tcl
+CONSTRAINTS_SDC := $(GENERATED_DIR)/constraints.sdc
+SYNTH_DC_CONFIG := $(GENERATED_DIR)/synth.dc.tcl
 
 # Common utilities
 MKDIR := mkdir -p
@@ -32,7 +35,7 @@ init: dirs
 	@echo "[INIT] $(PROJECT_ROOT)/Project.toml"
 
 clean:
-	@$(MAKE) --no-print-directory config-clean lint-clean
+	@$(MAKE) --no-print-directory config-clean lint-clean synth-clean
 	@echo "[CLEAN] Generated flow outputs removed; virtual environment preserved"
 
 distclean:
@@ -49,6 +52,7 @@ help:
 	@echo "  env          Create or update the project Python environment"
 	@echo "  config       Validate Project.toml and generate build configuration"
 	@echo "  lint         Run RTL lint"
+	@echo "  synth        Run RTL synthesis"
 	@echo "  workflow     Run the ordered stages from Project.toml"
 	@echo "  clean        Remove generated flow outputs"
 	@echo "  distclean    Remove build directory and Project.toml"

@@ -1,4 +1,4 @@
-schema_version = 2
+schema_version = 3
 
 [parameters]
 XLEN = 32
@@ -28,13 +28,33 @@ patterns = ["**/*.sv"]
 jobs = 1
 
 [environment]
-python = "python3"
 required_commands = ["bash"]
 required_variables = []
+
+[constraints]
+
+# [[constraints.clocks]]
+# name = "clk_i"
+# period = 10.0
+# waveform = [0.0, 5.0]
+# setup_uncertainty = 0.20
+# hold_uncertainty = 0.05
+# transition = 0.10
 
 # [flow.lint.spyglass]
 
 # [flow.lint.verilator]
+
+# [flow.synth.dc]
+# target_libraries = ["/absolute/path/to/slow.db"]
+# link_libraries = []
+# synthetic_libraries = []
+# compile = "ultra"
+# options = ["-64bit"]
+
+# [[flow.synth.dc.min_libraries]]
+# max = "/absolute/path/to/slow.db"
+# min = "/absolute/path/to/fast.db"
 
 [workflow]
 stages = []
