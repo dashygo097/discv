@@ -10,7 +10,8 @@ package core_types_pkg;
     ALU_SRL  = 4'b0110,
     ALU_SRA  = 4'b0111,
     ALU_SLT  = 4'b1000,
-    ALU_SLTU = 4'b1001
+    ALU_SLTU = 4'b1001,
+    ALU_NONE = 4'b1111
   } alu_op_e;
 
   typedef enum logic [1:0] {
@@ -20,9 +21,9 @@ package core_types_pkg;
   } operand_a_sel_e;
 
   typedef enum logic [1:0] {
-    OPERAND_B_ZERO      = 2'b00,
-    OPERAND_B_RS2       = 2'b01,
-    OPERAND_B_IMM = 2'b10
+    OPERAND_B_ZERO = 2'b00,
+    OPERAND_B_RS2  = 2'b01,
+    OPERAND_B_IMM  = 2'b10
   } operand_b_sel_e;
 
   typedef enum logic [2:0] {
@@ -53,7 +54,7 @@ package core_types_pkg;
 
   typedef enum logic [1:0] {
     RESULT_ALU     = 2'b00,
-    RESULT_MEM  = 2'b01,
+    RESULT_MEM     = 2'b01,
     RESULT_PC_STEP = 2'b10,
     RESULT_CSR     = 2'b11
   } result_source_e;
@@ -76,5 +77,33 @@ package core_types_pkg;
     logic           serialize;
     logic           illegal;
   } decode_ctrl_t;
+
+  function automatic decode_ctrl_t make_decode_ctrl(
+      input alu_op_e alu_op = ALU_NONE, input operand_a_sel_e operand_a = OPERAND_A_ZERO,
+      input operand_b_sel_e operand_b = OPERAND_B_ZERO, input immediate_sel_e immediate = IMM_NONE,
+      input branch_op_e branch_op = BR_NONE, input memory_size_e memory_size = MEM_WORD,
+      input result_source_e result_source = RESULT_ALU, input logic rs1_read = 1'b0,
+      input logic rs2_read = 1'b0, input logic reg_write = 1'b0, input logic memory_read = 1'b0,
+      input logic memory_write = 1'b0, input logic memory_unsigned = 1'b0, input logic jump = 1'b0,
+      input logic serialize = 1'b0, input logic illegal = 1'b0);
+    make_decode_ctrl = '{
+        alu_op: alu_op,
+        operand_a: operand_a,
+        operand_b: operand_b,
+        immediate: immediate,
+        branch_op: branch_op,
+        memory_size: memory_size,
+        result_source: result_source,
+        rs1_read: rs1_read,
+        rs2_read: rs2_read,
+        reg_write: reg_write,
+        memory_read: memory_read,
+        memory_write: memory_write,
+        memory_unsigned: memory_unsigned,
+        jump: jump,
+        serialize: serialize,
+        illegal: illegal
+    };
+  endfunction
 
 endpackage

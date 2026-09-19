@@ -11,8 +11,6 @@ module alu
   localparam int unsigned SHAMT_WIDTH = $clog2($bits(word_t));
 
   always_comb begin
-    result_o = '0;
-
     unique case (op_i)
       ALU_ADD:  result_o = lhs_i + rhs_i;
       ALU_SUB:  result_o = lhs_i - rhs_i;
@@ -22,8 +20,9 @@ module alu
       ALU_SLL:  result_o = lhs_i << rhs_i[SHAMT_WIDTH-1:0];
       ALU_SRL:  result_o = lhs_i >> rhs_i[SHAMT_WIDTH-1:0];
       ALU_SRA:  result_o = $unsigned($signed(lhs_i) >>> rhs_i[SHAMT_WIDTH-1:0]);
-      ALU_SLT:  result_o[0] = $signed(lhs_i) < $signed(rhs_i);
-      ALU_SLTU: result_o[0] = lhs_i < rhs_i;
+      ALU_SLT:  result_o = word_t'($signed(lhs_i) < $signed(rhs_i));
+      ALU_SLTU: result_o = word_t'(lhs_i < rhs_i);
+      ALU_NONE: result_o = '0;
       default:  result_o = '0;
     endcase
   end
