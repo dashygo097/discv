@@ -106,4 +106,48 @@ package core_types_pkg;
     };
   endfunction
 
+  typedef struct packed {
+    addr_t  pc;
+    instr_t instr;
+  } if_id_payload_t;
+
+  typedef struct packed {
+    addr_t        pc;
+    reg_addr_t    rs1;
+    reg_addr_t    rs2;
+    reg_addr_t    rd;
+    word_t        immediate;
+    decode_ctrl_t ctrl;
+  } id_issue_payload_t;
+
+  typedef struct packed {
+    addr_t        pc;
+    reg_addr_t    rd;
+    word_t        rs1_data;
+    word_t        rs2_data;
+    word_t        immediate;
+    decode_ctrl_t ctrl;
+  } issue_ex_payload_t;
+
+  typedef struct packed {
+    addr_t          pc;
+    reg_addr_t      rd;
+    word_t          result;
+    word_t          store_data;
+    memory_size_e   memory_size;
+    result_source_e result_source;
+    logic           reg_write;
+    logic           memory_read;
+    logic           memory_write;
+    logic           memory_unsigned;
+    logic           illegal;
+  } ex_mem_payload_t;
+
+  typedef struct packed {
+    reg_addr_t rd;
+    word_t     result;
+    logic      reg_write;
+    logic      illegal;
+  } mem_wb_payload_t;
+
 endpackage

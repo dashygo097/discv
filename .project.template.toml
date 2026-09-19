@@ -15,6 +15,11 @@ roots = ["rtl/pkgs"]
 patterns = ["**/*.sv"]
 
 [[rtl.filesets]]
+name = "protocols"
+roots = ["rtl/protocols"]
+patterns = ["**/*.sv"]
+
+[[rtl.filesets]]
 name = "design"
 roots = ["rtl/core"]
 patterns = ["**/*.sv"]
