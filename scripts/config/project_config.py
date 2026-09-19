@@ -24,11 +24,22 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.4.0"
+GENERATOR_VERSION = "0.5.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
 GENERATED_HEADER_NAMES = {"cfg.svh"}
+MANAGED_OUTPUT_NAMES = {
+    ".done",
+    "cfg.svh",
+    "constraints.sdc",
+    "manifest.json",
+    "project.env",
+    "project.mk",
+    "rtl.f",
+    "rtl.tcl",
+    "synth.dc.tcl",
+}
 
 
 class ConfigError(Exception):
@@ -1018,6 +1029,27 @@ def render_environment(config, digest):
 def render_outputs(config, config_path, project_root, output_dir):
     digest = config_digest(config)
     resolved = resolved_configuration(config)
+    outputs = {
+        "project.mk": render_makefile(config, digest, project_root),
+        "project.env": render_environment(config, digest),
+        "cfg.svh": render_svh(config, digest),
+    }
+    if config["flow"]["lint"]:
+        outputs["rtl.f"] = render_filelist(
+            config, digest, project_root, output_dir
+        )
+    if "dc" in config["flow"]["synth"]:
+        outputs.update(
+            {
+                "constraints.sdc": render_constraints_sdc(config, digest),
+                "rtl.tcl": render_rtl_tcl(
+                    config, digest, project_root, output_dir
+                ),
+                "synth.dc.tcl": render_dc_tcl(config, digest),
+            }
+        )
+
+    output_names = sorted([*outputs, "manifest.json"])
     manifest = {
         **resolved,
         "configuration_digest": digest,
@@ -1026,27 +1058,10 @@ def render_outputs(config, config_path, project_root, output_dir):
             "version": GENERATOR_VERSION,
         },
         "project_file": relative_project_path(project_root, config_path),
-        "outputs": [
-            "cfg.svh",
-            "constraints.sdc",
-            "manifest.json",
-            "project.env",
-            "project.mk",
-            "rtl.f",
-            "rtl.tcl",
-            "synth.dc.tcl",
-        ],
+        "outputs": output_names,
     }
-    return {
-        "manifest.json": json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        "project.mk": render_makefile(config, digest, project_root),
-        "project.env": render_environment(config, digest),
-        "cfg.svh": render_svh(config, digest),
-        "constraints.sdc": render_constraints_sdc(config, digest),
-        "rtl.f": render_filelist(config, digest, project_root, output_dir),
-        "rtl.tcl": render_rtl_tcl(config, digest, project_root, output_dir),
-        "synth.dc.tcl": render_dc_tcl(config, digest),
-    }
+    outputs["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    return outputs
 
 
 def atomic_write(path, content):
@@ -1068,6 +1083,16 @@ def atomic_write(path, content):
         raise
 
 
+def remove_stale_outputs(output_dir, outputs):
+    stale_names = MANAGED_OUTPUT_NAMES - set(outputs)
+    for name in sorted(stale_names):
+        path = output_dir / name
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            raise ConfigError(f"stale generated output is not a file: {path}")
+
+
 def check_outputs(output_dir, outputs):
     stale = []
     for name, expected in sorted(outputs.items()):
@@ -1076,6 +1101,13 @@ def check_outputs(output_dir, outputs):
             stale.append(name)
     if stale:
         raise ConfigError(f"missing or stale generated file(s): {', '.join(stale)}")
+    unexpected = sorted(
+        name
+        for name in MANAGED_OUTPUT_NAMES - set(outputs)
+        if (output_dir / name).exists()
+    )
+    if unexpected:
+        raise ConfigError(f"unexpected generated file(s): {', '.join(unexpected)}")
 
 
 def parse_args():
@@ -1102,7 +1134,11 @@ def main():
         outputs = render_outputs(config, config_path, project_root, output_dir)
         if args.command == "generate":
             for name, content in sorted(outputs.items()):
+                if name == "manifest.json":
+                    continue
                 atomic_write(output_dir / name, content)
+            remove_stale_outputs(output_dir, outputs)
+            atomic_write(output_dir / "manifest.json", outputs["manifest.json"])
             print(f"Generated configuration: {output_dir}")
         else:
             check_outputs(output_dir, outputs)

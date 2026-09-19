@@ -4,14 +4,16 @@ SYNTH_BUILD_DIR := $(BUILD_DIR)/synth
 SYNTH_TOOLS ?=
 SYNTH_TOOL_STAMPS := $(addsuffix /.done,$(addprefix $(SYNTH_BUILD_DIR)/,$(SYNTH_TOOLS)))
 
-.PHONY: synth synth-clean
+.PHONY: synth synth-run synth-clean
 
 synth: config
+	+@$(MAKE) --no-print-directory --keep-going synth-run
+
+synth-run: $(SYNTH_TOOL_STAMPS)
 	@if test -z "$(strip $(SYNTH_TOOLS))"; then \
 		echo "ERROR: no synthesis tool configured; add [flow.synth.<tool>] to Project.toml" >&2; \
 		exit 2; \
 	fi
-	+@$(MAKE) --no-print-directory --keep-going $(SYNTH_TOOL_STAMPS)
 
 $(SYNTH_BUILD_DIR)/%/.done: $(RTL_TCL) $(CONSTRAINTS_SDC) \
 		$(SYNTH_DC_CONFIG) $(PROJECT_ENV) $(CONFIG_MANIFEST) \

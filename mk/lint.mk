@@ -10,14 +10,16 @@ LINT_TOOLS ?=
 LINT_TOOL_STAMPS := $(addsuffix /.done,$(addprefix $(LINT_BUILD_DIR)/,$(LINT_TOOLS)))
 
 # Targets
-.PHONY: lint lint-clean
+.PHONY: lint lint-run lint-clean
 
 lint: config
+	+@$(MAKE) --no-print-directory --keep-going lint-run
+
+lint-run: $(LINT_TOOL_STAMPS)
 	@if test -z "$(strip $(LINT_TOOLS))"; then \
 		echo "ERROR: no linter configured; add [flow.lint.<tool>] to Project.toml" >&2; \
 		exit 2; \
 	fi
-	+@$(MAKE) --no-print-directory --keep-going $(LINT_TOOL_STAMPS)
 
 $(LINT_BUILD_DIR)/%/.done: $(LINT_FILELIST) $(PROJECT_ENV) $(CONFIG_MANIFEST) \
 		$(wildcard $(RTL_SOURCES)) \

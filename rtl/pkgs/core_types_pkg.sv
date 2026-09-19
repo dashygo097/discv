@@ -1,4 +1,5 @@
 package core_types_pkg;
+  import riscv_pkg::*;
 
   typedef enum logic [3:0] {
     ALU_ADD  = 4'b0000,

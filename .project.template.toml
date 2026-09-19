@@ -12,7 +12,8 @@ top = ""
 [[rtl.filesets]]
 name = "packages"
 roots = ["rtl/pkgs"]
-patterns = ["**/*.sv"]
+# NOTE: list in turn for dependencies 
+patterns = ["cfg_pkg.sv", "riscv_pkg.sv", "core_types_pkg.sv"]
 
 [[rtl.filesets]]
 name = "protocols"

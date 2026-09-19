@@ -10,7 +10,6 @@ stage_initialize() {
   require_var PROJECT_ROOT
   require_var PROJECT_ENV
   require_var CONFIG_MANIFEST
-  require_var RTL_FILELIST
   require_var STAGE_NAME
   require_var STAGE_TOOL
   require_var STAGE_BUILD_DIR
@@ -19,7 +18,6 @@ stage_initialize() {
   require_cmd tee
   require_file "${PROJECT_ENV}"
   require_file "${CONFIG_MANIFEST}"
-  require_file "${RTL_FILELIST}"
   require_file "${PROJECT_ROOT}/scripts/common/write_run_manifest.py"
 
   STAGE_LOG_DIR=${STAGE_BUILD_DIR}/logs
