@@ -9,28 +9,28 @@ module pipe_stage #(
     handshake_if.source downstream
 );
   logic allow_in;
-  logic allow_out;
+  logic valid_r;
   payload_t payload_r;
 
   always_comb begin
-    allow_in = !allow_out || downstream.ready;
+    allow_in = !valid_r || downstream.ready;
     upstream.ready = !flush_i && allow_in;
 
-    downstream.valid = allow_out && flush_i;
+    downstream.valid = valid_r && !flush_i;
     downstream.payload = payload_r;
   end
 
   always_ff @(posedge clk_i or negedge rst_n_i) begin
     if (!rst_n_i) begin
-      allow_out <= 'b0;
+      valid_r   <= 1'b0;
       payload_r <= '0;
     end else if (flush_i) begin
-      allow_out <= 'b0;
-      payload_r <= 'b0;
-    end else if (upstream.ready) begin
-      allow_out <= upstream.valid;
+      valid_r   <= 1'b0;
+      payload_r <= '0;
+    end else begin
+      valid_r <= upstream.ready ? upstream.valid : 1'b1;
 
-      if (upstream.valid) begin
+      if (upstream.ready && upstream.valid) begin
         payload_r <= upstream.payload;
       end
     end

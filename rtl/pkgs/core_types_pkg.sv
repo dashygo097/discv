@@ -1,6 +1,35 @@
 package core_types_pkg;
   import riscv_pkg::*;
 
+  typedef struct packed {
+    addr_t addr;
+  } imem_req_t;
+
+  typedef struct packed {
+    instr_t data;
+    logic   error;
+  } imem_rsp_t;
+
+  typedef struct packed {
+    addr_t        addr;
+    logic         write;
+    word_t        data;
+    byte_enable_t strb;
+  } dmem_req_t;
+
+  typedef struct packed {
+    word_t data;
+    logic  error;
+  } dmem_rsp_t;
+
+  typedef struct packed {
+    addr_t     pc;
+    reg_addr_t rd;
+    word_t     data;
+    logic      write;
+    logic      illegal;
+  } retire_lane_t;
+
   typedef enum logic [3:0] {
     ALU_ADD  = 4'b0000,
     ALU_SUB  = 4'b0001,
@@ -110,6 +139,7 @@ package core_types_pkg;
   typedef struct packed {
     addr_t  pc;
     instr_t instr;
+    logic   error;
   } if_id_payload_t;
 
   typedef struct packed {
@@ -145,6 +175,7 @@ package core_types_pkg;
   } ex_mem_payload_t;
 
   typedef struct packed {
+    addr_t     pc;
     reg_addr_t rd;
     word_t     result;
     logic      reg_write;
