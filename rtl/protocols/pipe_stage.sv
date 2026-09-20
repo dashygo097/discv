@@ -1,4 +1,4 @@
-module pipeline_reg #(
+module pipe_stage #(
     parameter type payload_t = logic
 ) (
     input logic clk_i,
