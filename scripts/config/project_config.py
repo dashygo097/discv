@@ -24,7 +24,7 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.5.0"
+GENERATOR_VERSION = "0.6.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
@@ -463,7 +463,7 @@ def normalize_dc_synthesis(dc, project_root):
             "target_libraries",
             "link_libraries",
             "synthetic_libraries",
-            "min_libraries",
+            "library_pairs",
             "compile",
             "options",
         },
@@ -489,13 +489,13 @@ def normalize_dc_synthesis(dc, project_root):
     if compile_mode not in {"standard", "ultra"}:
         raise ConfigError(f'{location}.compile: expected "standard" or "ultra"')
 
-    min_libraries = dc.get("min_libraries", [])
-    if not isinstance(min_libraries, list):
-        raise ConfigError(f"{location}.min_libraries: expected an array of tables")
+    library_pairs = dc.get("library_pairs", [])
+    if not isinstance(library_pairs, list):
+        raise ConfigError(f"{location}.library_pairs: expected an array of tables")
     normalized_pairs = []
     known_max_libraries = set(target_libraries + link_libraries)
-    for index, pair in enumerate(min_libraries):
-        pair_location = f"{location}.min_libraries[{index}]"
+    for index, pair in enumerate(library_pairs):
+        pair_location = f"{location}.library_pairs[{index}]"
         if not isinstance(pair, dict):
             raise ConfigError(f"{pair_location}: expected a table")
         reject_unknown(pair, {"max", "min"}, pair_location)
@@ -521,7 +521,7 @@ def normalize_dc_synthesis(dc, project_root):
         "target_libraries": target_libraries,
         "link_libraries": link_libraries,
         "synthetic_libraries": synthetic_libraries,
-        "min_libraries": normalized_pairs,
+        "library_pairs": normalized_pairs,
         "compile": compile_mode,
         "options": string_list(dc.get("options", []), f"{location}.options"),
     }
@@ -911,18 +911,10 @@ def render_constraints_sdc(config, digest):
 
 
 def render_dc_tcl(config, digest):
-    dc = config["flow"]["synth"].get("dc")
-    if dc is None:
-        dc = {
-            "target_libraries": [],
-            "link_libraries": [],
-            "synthetic_libraries": [],
-            "min_libraries": [],
-            "compile": "ultra",
-        }
+    dc = config["flow"]["synth"]["dc"]
     pairs = [
         f"[list {tcl_braced(pair['max'])} {tcl_braced(pair['min'])}]"
-        for pair in dc["min_libraries"]
+        for pair in dc["library_pairs"]
     ]
     return "".join(
         [

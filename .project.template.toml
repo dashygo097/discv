@@ -12,7 +12,7 @@ top = ""
 [[rtl.filesets]]
 name = "packages"
 roots = ["rtl/pkgs"]
-# NOTE: list in turn for dependencies 
+# NOTE: list in turn for dependencies
 patterns = ["cfg_pkg.sv", "riscv_pkg.sv", "core_types_pkg.sv"]
 
 [[rtl.filesets]]
@@ -55,12 +55,11 @@ required_variables = []
 # target_libraries = ["/absolute/path/to/slow.db"]
 # link_libraries = []
 # synthetic_libraries = []
+# library_pairs = [
+#   { max = "/absolute/path/to/slow.db", min = "/absolute/path/to/fast.db" },
+# ]
 # compile = "ultra"
 # options = ["-64bit"]
-
-# [[flow.synth.dc.min_libraries]]
-# max = "/absolute/path/to/slow.db"
-# min = "/absolute/path/to/fast.db"
 
 [workflow]
 stages = []
