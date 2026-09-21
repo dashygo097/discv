@@ -5,24 +5,11 @@ module cpu
     input logic clk_i,
     input logic rst_n_i,
 
-    output logic      imem_req_valid_o,
-    input  logic      imem_req_ready_i,
-    output imem_req_t imem_req_o,
-
-    input  logic      imem_rsp_valid_i,
-    output logic      imem_rsp_ready_o,
-    input  imem_rsp_t imem_rsp_i,
-
-    output logic      dmem_req_valid_o,
-    input  logic      dmem_req_ready_i,
-    output dmem_req_t dmem_req_o,
-
-    input  logic      dmem_rsp_valid_i,
-    output logic      dmem_rsp_ready_o,
-    input  dmem_rsp_t dmem_rsp_i,
-
-    output logic         retire_valid_o,
-    output retire_lane_t retire_lane_o
+    handshake_if.source imem_req,
+    handshake_if.sink   imem_rsp,
+    handshake_if.source dmem_req,
+    handshake_if.sink   dmem_rsp,
+    handshake_if.source retire
 );
 
   handshake_if #(.payload_t(if_id_payload_t)) if_id_input ();
@@ -141,21 +128,21 @@ module cpu
   );
 
   always_comb begin
-    imem_req_valid_o = (fetch_state_r == FETCH_READY) && !redirect_valid;
-    imem_req_o = '{addr: fetch_pc_r};
+    imem_req.valid = (fetch_state_r == FETCH_READY) && !redirect_valid;
+    imem_req.payload = '{addr: fetch_pc_r};
 
-    if_id_input.valid = (fetch_state_r == FETCH_WAIT) && imem_rsp_valid_i;
+    if_id_input.valid = (fetch_state_r == FETCH_WAIT) && imem_rsp.valid;
     if_id_input.payload = '{
         pc: fetch_request_pc_r,
-        instr: imem_rsp_i.data,
-        error: imem_rsp_i.error
+        instr: imem_rsp.payload.data,
+        error: imem_rsp.payload.error
     };
 
-    imem_rsp_ready_o = (fetch_state_r == FETCH_DISCARD) ||
+    imem_rsp.ready = (fetch_state_r == FETCH_DISCARD) ||
         ((fetch_state_r == FETCH_WAIT) && if_id_input.ready);
 
-    fetch_request_fire = imem_req_valid_o && imem_req_ready_i;
-    fetch_response_fire = imem_rsp_valid_i && imem_rsp_ready_o;
+    fetch_request_fire = imem_req.valid && imem_req.ready;
+    fetch_response_fire = imem_rsp.valid && imem_rsp.ready;
   end
 
   always_comb begin
@@ -249,6 +236,7 @@ module cpu
     id_issue_input.valid = if_id_output.valid;
     id_issue_input.payload = '{
         pc: if_id_output.payload.pc,
+        instr: if_id_output.payload.instr,
         rs1: decode_rs1,
         rs2: decode_rs2,
         rd: decode_rd,
@@ -314,6 +302,7 @@ module cpu
     issue_ex_input.valid = id_issue_output.valid && !issue_hazard && !issue_serialize;
     issue_ex_input.payload = '{
         pc: id_issue_output.payload.pc,
+        instr: id_issue_output.payload.instr,
         rd: id_issue_output.payload.rd,
         rs1_data: id_issue_output.payload.ctrl.rs1_read ? rs1_data : '0,
         rs2_data: id_issue_output.payload.ctrl.rs2_read ? rs2_data : '0,
@@ -365,6 +354,7 @@ module cpu
     ex_mem_input.valid = issue_ex_output.valid;
     ex_mem_input.payload = '{
         pc: issue_ex_output.payload.pc,
+        instr: issue_ex_output.payload.instr,
         rd: issue_ex_output.payload.rd,
         result: execute_result,
         store_data: issue_ex_output.payload.rs2_data,
@@ -382,7 +372,7 @@ module cpu
   lsu u_lsu (
       .byte_offset_i(ex_mem_output.payload.result[1:0]),
       .store_data_i(ex_mem_output.payload.store_data),
-      .read_data_i(dmem_rsp_i.data),
+      .read_data_i(dmem_rsp.payload.data),
       .size_i(ex_mem_output.payload.memory_size),
       .unsigned_i(ex_mem_output.payload.memory_unsigned),
       .write_data_o(memory_write_data),
@@ -395,15 +385,15 @@ module cpu
     memory_access = ex_mem_output.payload.memory_read || ex_mem_output.payload.memory_write;
     memory_request = memory_access && !ex_mem_output.payload.illegal && !memory_misaligned;
 
-    dmem_req_valid_o = ex_mem_output.valid && memory_request && !memory_request_sent_r;
-    dmem_req_o = '{
+    dmem_req.valid = ex_mem_output.valid && memory_request && !memory_request_sent_r;
+    dmem_req.payload = '{
         addr: ex_mem_output.payload.result,
         write: ex_mem_output.payload.memory_write,
         data: memory_write_data,
         strb: memory_write_strb
     };
 
-    dmem_rsp_ready_o = 1'b0;
+    dmem_rsp.ready = 1'b0;
     ex_mem_output.ready = 1'b0;
     mem_wb_input.valid = 1'b0;
 
@@ -416,6 +406,7 @@ module cpu
 
     mem_wb_input.payload = '{
         pc: ex_mem_output.payload.pc,
+        instr: ex_mem_output.payload.instr,
         rd: ex_mem_output.payload.rd,
         result: memory_result,
         reg_write: ex_mem_output.payload.reg_write,
@@ -424,7 +415,7 @@ module cpu
         || (
         memory_access && memory_misaligned
         ) || (
-        memory_request_sent_r && dmem_rsp_valid_i && dmem_rsp_i.error
+        memory_request_sent_r && dmem_rsp.valid && dmem_rsp.payload.error
         )
     };
 
@@ -433,14 +424,14 @@ module cpu
         mem_wb_input.valid  = 1'b1;
         ex_mem_output.ready = mem_wb_input.ready;
       end else if (memory_request_sent_r) begin
-        mem_wb_input.valid = dmem_rsp_valid_i;
-        dmem_rsp_ready_o = mem_wb_input.ready;
-        ex_mem_output.ready = dmem_rsp_valid_i && mem_wb_input.ready;
+        mem_wb_input.valid = dmem_rsp.valid;
+        dmem_rsp.ready = mem_wb_input.ready;
+        ex_mem_output.ready = dmem_rsp.valid && mem_wb_input.ready;
       end
     end
 
-    memory_request_fire  = dmem_req_valid_o && dmem_req_ready_i;
-    memory_response_fire = dmem_rsp_valid_i && dmem_rsp_ready_o;
+    memory_request_fire  = dmem_req.valid && dmem_req.ready;
+    memory_response_fire = dmem_rsp.valid && dmem_rsp.ready;
   end
 
   always_ff @(posedge clk_i or negedge rst_n_i) begin
@@ -454,15 +445,17 @@ module cpu
   end
 
   always_comb begin
-    mem_wb_output.ready = 1'b1;
+    mem_wb_output.ready = retire.ready;
 
     regfile_write = mem_wb_output.valid &&
+        retire.ready &&
         mem_wb_output.payload.reg_write &&
         !mem_wb_output.payload.illegal;
 
-    retire_valid_o = mem_wb_output.valid;
-    retire_lane_o = '{
+    retire.valid = mem_wb_output.valid;
+    retire.payload = '{
         pc: mem_wb_output.payload.pc,
+        instr: mem_wb_output.payload.instr,
         rd: mem_wb_output.payload.rd,
         data: mem_wb_output.payload.result,
         write: regfile_write,

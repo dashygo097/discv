@@ -10,7 +10,7 @@ PYTHON                ?= $(VENV_PYTHON)
 
 # Stage implementation targets run in a fresh Make process after configuration
 # has been synchronized, so they always consume the current generated values.
-ifneq ($(filter config lint lint-run synth synth-run workflow,$(MAKECMDGOALS)),)
+ifneq ($(filter config lint lint-run synth synth-run sim sim-run sim-build sim-build-run workflow,$(MAKECMDGOALS)),)
 -include $(CONFIG_MAKEFILE)
 endif
 

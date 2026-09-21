@@ -24,7 +24,7 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.6.0"
+GENERATOR_VERSION = "0.8.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
@@ -33,11 +33,17 @@ MANAGED_OUTPUT_NAMES = {
     ".done",
     "cfg.svh",
     "constraints.sdc",
+    "demu/generated/cfg.hh",
+    "demu/generated/devices.hh",
+    "demu/generated/port_bindings.hh",
+    "demu/linker.ld",
+    "demu/start.S",
     "manifest.json",
     "project.env",
     "project.mk",
     "rtl.f",
     "rtl.tcl",
+    "sim.cmake",
     "synth.dc.tcl",
 }
 
@@ -96,6 +102,18 @@ def optional_number(table, key, location, *, positive=False):
     if key not in table:
         return None
     return number(table[key], f"{location}.{key}", positive=positive)
+
+
+def unsigned_integer(value, location, *, positive=False, maximum=0xFFFFFFFF):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{location}: expected an integer")
+    minimum = 1 if positive else 0
+    if value < minimum or value > maximum:
+        qualifier = "positive " if positive else ""
+        raise ConfigError(
+            f"{location}: expected a {qualifier}integer no greater than {maximum}"
+        )
+    return value
 
 
 def configuration_path(project_root, value, location, suffix=None):
@@ -527,6 +545,170 @@ def normalize_dc_synthesis(dc, project_root):
     }
 
 
+def normalize_verilator_simulation(verilator):
+    location = "flow.sim.verilator"
+    if not isinstance(verilator, dict):
+        raise ConfigError(f"{location}: expected a table")
+    reject_unknown(
+        verilator,
+        {
+            "threads",
+            "trace",
+            "options",
+        },
+        location,
+    )
+    return {
+        "threads": unsigned_integer(
+            verilator.get("threads", 1),
+            f"{location}.threads",
+            positive=True,
+        ),
+        "trace": require_bool(verilator, "trace", location)
+        if "trace" in verilator
+        else False,
+        "options": string_list(
+            verilator.get("options", []), f"{location}.options"
+        ),
+    }
+
+
+def normalize_simulation(raw, parameters, *, required):
+    simulation = raw.get("simulation", {})
+    if not isinstance(simulation, dict):
+        raise ConfigError("simulation: expected a table")
+    reject_unknown(
+        simulation,
+        {"reset_cycles", "max_cycles", "devices"},
+        "simulation",
+    )
+
+    devices = simulation.get("devices", [])
+    if not isinstance(devices, list):
+        raise ConfigError("simulation.devices: expected an array of tables")
+
+    normalized_devices = []
+    device_names = set()
+    load_tcm_count = 0
+    for index, device in enumerate(devices):
+        location = f"simulation.devices[{index}]"
+        if not isinstance(device, dict):
+            raise ConfigError(f"{location}: expected a table")
+        reject_unknown(
+            device,
+            {"name", "type", "base", "size", "load_address"},
+            location,
+        )
+
+        name = require_string(device, "name", location)
+        if not IDENTIFIER.match(name):
+            raise ConfigError(f"{location}.name: expected an identifier")
+        if name in device_names:
+            raise ConfigError(f"{location}.name: duplicate device name: {name}")
+        device_names.add(name)
+
+        device_type = require_string(device, "type", location)
+        if device_type not in {"tcm", "host_exit"}:
+            raise ConfigError(
+                f'{location}.type: expected "tcm" or "host_exit"'
+            )
+        base = unsigned_integer(device.get("base"), f"{location}.base")
+        size = unsigned_integer(
+            device.get("size"), f"{location}.size", positive=True
+        )
+        if base + size > 0x100000000:
+            raise ConfigError(f"{location}: device range exceeds 32-bit address space")
+
+        normalized_device = {
+            "name": name,
+            "type": device_type,
+            "base": base,
+            "size": size,
+        }
+        if "load_address" in device:
+            if device_type != "tcm":
+                raise ConfigError(
+                    f"{location}.load_address: only TCM devices can define a load address"
+                )
+            load_address = unsigned_integer(
+                device["load_address"], f"{location}.load_address"
+            )
+            if not base <= load_address < base + size:
+                raise ConfigError(
+                    f"{location}.load_address: address is outside the device"
+                )
+            normalized_device["load_address"] = load_address
+            load_tcm_count += 1
+
+        normalized_devices.append(normalized_device)
+
+    ordered_devices = sorted(normalized_devices, key=lambda device: device["base"])
+    for previous, current in zip(ordered_devices, ordered_devices[1:]):
+        if previous["base"] + previous["size"] > current["base"]:
+            raise ConfigError(
+                "simulation.devices: overlapping address ranges: "
+                f"{previous['name']} and {current['name']}"
+            )
+
+    if required and not normalized_devices:
+        raise ConfigError(
+            "simulation.devices: expected at least one device when simulation is enabled"
+        )
+    reset_vector = parameters.get("RESET_VECTOR")
+    if required and (
+        isinstance(reset_vector, bool) or not isinstance(reset_vector, int)
+    ):
+        raise ConfigError(
+            "simulation: parameters.RESET_VECTOR must be an integer"
+        )
+    if required:
+        devices_by_name = {
+            device["name"]: device for device in normalized_devices
+        }
+        for name in ("imem", "dmem"):
+            device = devices_by_name.get(name)
+            if device is None or device["type"] != "tcm":
+                raise ConfigError(
+                    f'simulation.devices: "{name}" must be configured with type = "tcm"'
+                )
+
+        imem = devices_by_name["imem"]
+        if load_tcm_count != 1 or imem.get("load_address") != reset_vector:
+            raise ConfigError(
+                "simulation.devices: imem must be the only device defining "
+                "load_address, and it must equal parameters.RESET_VECTOR"
+            )
+        if not imem["base"] <= reset_vector < imem["base"] + imem["size"]:
+            raise ConfigError(
+                "simulation.devices: parameters.RESET_VECTOR is outside imem"
+            )
+
+        host_exit_devices = [
+            device
+            for device in normalized_devices
+            if device["type"] == "host_exit"
+        ]
+        if len(host_exit_devices) != 1:
+            raise ConfigError(
+                "simulation.devices: exactly one host_exit device is required"
+            )
+
+    return {
+        "reset_cycles": unsigned_integer(
+            simulation.get("reset_cycles", 5),
+            "simulation.reset_cycles",
+            positive=True,
+        ),
+        "max_cycles": unsigned_integer(
+            simulation.get("max_cycles", 1000000),
+            "simulation.max_cycles",
+            positive=True,
+            maximum=0xFFFFFFFFFFFFFFFF,
+        ),
+        "devices": normalized_devices,
+    }
+
+
 def load_config(config_path, project_root):
     with config_path.open("rb") as stream:
         raw = tomllib.load(stream)
@@ -541,6 +723,7 @@ def load_config(config_path, project_root):
             "environment",
             "constraints",
             "flow",
+            "simulation",
             "workflow",
         },
         "<root>",
@@ -606,7 +789,7 @@ def load_config(config_path, project_root):
     flow = raw.get("flow", {})
     if not isinstance(flow, dict):
         raise ConfigError("flow: expected a table")
-    reject_unknown(flow, {"lint", "synth"}, "flow")
+    reject_unknown(flow, {"lint", "synth", "sim"}, "flow")
     lint = flow.get("lint", {})
     if not isinstance(lint, dict):
         raise ConfigError("flow.lint: expected a table")
@@ -634,12 +817,27 @@ def load_config(config_path, project_root):
     if "dc" in synth:
         normalized_synth["dc"] = normalize_dc_synthesis(synth["dc"], project_root)
 
+    sim = flow.get("sim", {})
+    if not isinstance(sim, dict):
+        raise ConfigError("flow.sim: expected a table")
+    supported_sim_tools = {"verilator"}
+    reject_unknown(sim, supported_sim_tools, "flow.sim")
+    normalized_sim = {}
+    if "verilator" in sim:
+        normalized_sim["verilator"] = normalize_verilator_simulation(
+            sim["verilator"]
+        )
+
+    simulation = normalize_simulation(
+        raw, normalized_parameters, required=bool(normalized_sim)
+    )
+
     constraints = normalize_constraints(raw)
 
     workflow = require_table(raw, "workflow")
     reject_unknown(workflow, {"stages"}, "workflow")
     stages = string_list(workflow.get("stages", []), "workflow.stages")
-    unsupported = sorted(set(stages) - {"lint", "synth"})
+    unsupported = sorted(set(stages) - {"lint", "synth", "sim"})
     if unsupported:
         raise ConfigError(
             f"workflow.stages: unsupported stage(s): {', '.join(unsupported)}"
@@ -651,6 +849,10 @@ def load_config(config_path, project_root):
     if "synth" in stages and not normalized_synth:
         raise ConfigError(
             "workflow.stages: synth is listed but no flow.synth.<tool> table exists"
+        )
+    if "sim" in stages and not normalized_sim:
+        raise ConfigError(
+            "workflow.stages: sim is listed but no flow.sim.<tool> table exists"
         )
     if len(stages) != len(set(stages)):
         raise ConfigError("workflow.stages: duplicate stages are not allowed")
@@ -669,7 +871,12 @@ def load_config(config_path, project_root):
             "required_variables": required_variables,
         },
         "constraints": constraints,
-        "flow": {"lint": normalized_lint, "synth": normalized_synth},
+        "flow": {
+            "lint": normalized_lint,
+            "synth": normalized_synth,
+            "sim": normalized_sim,
+        },
+        "simulation": simulation,
         "workflow": {"stages": stages},
     }
 
@@ -686,6 +893,7 @@ def resolved_configuration(config):
         "environment": config["environment"],
         "constraints": config["constraints"],
         "flow": config["flow"],
+        "simulation": config["simulation"],
         "workflow": config["workflow"],
     }
 
@@ -928,6 +1136,317 @@ def render_dc_tcl(config, digest):
     )
 
 
+def cmake_quote(value):
+    value = str(value)
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def cpp_string(value):
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def render_demu_config(config, digest):
+    values = []
+    for name, value in config["parameters"].items():
+        if isinstance(value, bool):
+            declaration = f"inline constexpr bool {name} = {'true' if value else 'false'};"
+        elif isinstance(value, int):
+            declaration = (
+                f"inline constexpr std::uint64_t {name} = UINT64_C({value});"
+            )
+        else:
+            declaration = (
+                f"inline constexpr std::string_view {name} = {cpp_string(value)};"
+            )
+        values.append(declaration)
+
+    return "".join(
+        [
+            header("//", digest),
+            "#pragma once\n\n",
+            "#include <cstdint>\n",
+            "#include <string_view>\n",
+            "\nnamespace demu::generated {\n\n",
+            "\n".join(values),
+            "\n\n} // namespace demu::generated\n",
+        ]
+    )
+
+
+def render_demu_devices(config, digest):
+    devices = config["simulation"]["devices"]
+    type_names = {
+        "tcm": "TCM",
+        "host_exit": "HostExit",
+    }
+    entries = []
+    for device in devices:
+        entries.append(
+            "    DeviceDescriptor{"
+            f"{cpp_string(device['name'])}, "
+            f"hal::DeviceType::{type_names[device['type']]}, "
+            f"UINT64_C({device['base']}), UINT64_C({device['size']}), "
+            f"{'true' if 'load_address' in device else 'false'}, "
+            f"UINT64_C({device.get('load_address', 0)})"
+            "}"
+        )
+    device_entries = ",\n".join(entries)
+    return "".join(
+        [
+            header("//", digest),
+            "#pragma once\n\n",
+            '#include "demu/hal/device.hh"\n',
+            "#include <array>\n",
+            "#include <cstdint>\n",
+            "\nnamespace demu::generated {\n\n",
+            "using hal::DeviceDescriptor;\n\n",
+            f"inline constexpr std::array<DeviceDescriptor, {len(devices)}> DEVICES{{{{\n",
+            device_entries,
+            "\n}};\n\n",
+            "} // namespace demu::generated\n",
+        ]
+    )
+
+
+def render_demu_port_bindings(config, digest):
+    devices = config["simulation"]["devices"]
+    rtl_top = config["rtl"]["top"]
+    sim_top = rtl_top if rtl_top.endswith("_sim_top") else f"{rtl_top}_sim_top"
+    verilated_top = f"V{sim_top}"
+    device_types = {
+        "tcm": ("hal::tcm::TCM", "demu/hal/peripheral/tcm/tcm.hh"),
+        "host_exit": (
+            "hal::host_exit::HostExit",
+            "demu/hal/peripheral/host_exit/host_exit.hh",
+        ),
+    }
+    includes = sorted({device_types[device["type"]][1] for device in devices})
+    registrations = [
+        f"  manager.register_device<{device_types[device['type']][0]}>("
+        f"{index}, DEVICES[{index}]);\n"
+        for index, device in enumerate(devices)
+    ]
+    return "".join(
+        [
+            header("//", digest),
+            "#pragma once\n\n",
+            f'#include "{verilated_top}.h"\n',
+            '#include "demu/generated/devices.hh"\n',
+            '#include "demu/hal/bus/virt/port_handler.hh"\n',
+            '#include "demu/hal/device_manager.hh"\n',
+            *[f'#include "{path}"\n' for path in includes],
+            "\nnamespace demu::generated {\n\n",
+            f"inline auto bind_imem({verilated_top} *dut) noexcept\n",
+            "    -> hal::virt::PortSignals {\n",
+            "  return hal::virt::PortSignals{\n",
+            "      &dut->imem_req_valid_o, &dut->imem_req_ready_i,\n",
+            "      &dut->imem_req_addr_o,  nullptr,\n",
+            "      nullptr,                nullptr,\n",
+            "      &dut->imem_rsp_valid_i, &dut->imem_rsp_ready_o,\n",
+            "      &dut->imem_rsp_data_i,  &dut->imem_rsp_error_i};\n",
+            "}\n\n",
+            f"inline auto bind_dmem({verilated_top} *dut) noexcept\n",
+            "    -> hal::virt::PortSignals {\n",
+            "  return hal::virt::PortSignals{\n",
+            "      &dut->dmem_req_valid_o, &dut->dmem_req_ready_i,\n",
+            "      &dut->dmem_req_addr_o,  &dut->dmem_req_write_o,\n",
+            "      &dut->dmem_req_data_o,  &dut->dmem_req_strb_o,\n",
+            "      &dut->dmem_rsp_valid_i, &dut->dmem_rsp_ready_o,\n",
+            "      &dut->dmem_rsp_data_i,  &dut->dmem_rsp_error_i};\n",
+            "}\n\n",
+            f"inline void register_devices(hal::DeviceManager &manager, "
+            f"{verilated_top} *dut) {{\n",
+            "  if (dut == nullptr) {\n",
+            '    HAL_ERROR("Cannot register devices for a null DUT")\n',
+            "  }\n\n",
+            *registrations,
+            "\n",
+            "  manager.register_handler(\n",
+            "      std::make_unique<hal::virt::PortHandler>(\n",
+            "          bind_imem(dut),\n",
+            "          [&manager](addr_t address, bool, word_t, byte_t) {\n",
+            "            return manager.read_instruction(address);\n",
+            "          }));\n",
+            "  manager.register_handler(\n",
+            "      std::make_unique<hal::virt::PortHandler>(\n",
+            "          bind_dmem(dut),\n",
+            "          [&manager](addr_t address, bool write, word_t data,\n",
+            "                     byte_t strb) {\n",
+            "            return manager.access_data(address, write, data, strb);\n",
+            "          },\n",
+            "          [&manager]() { manager.complete_data_response(); }));\n",
+            "}\n\n",
+            "} // namespace demu::generated\n",
+        ]
+    )
+
+
+def render_demu_linker(config, digest):
+    devices = {
+        device["name"]: device for device in config["simulation"]["devices"]
+    }
+    imem = devices["imem"]
+    dmem = devices["dmem"]
+    imem_origin = imem["load_address"]
+    imem_length = imem["base"] + imem["size"] - imem_origin
+
+    return "".join(
+        [
+            "/* Generated by project_config.py; do not edit.\n",
+            f" * Configuration digest: {digest}\n",
+            " */\n",
+            "OUTPUT_ARCH(riscv)\n",
+            "ENTRY(_start)\n\n",
+            "MEMORY\n",
+            "{\n",
+            f"  IMEM (rx)  : ORIGIN = 0x{imem_origin:08X}, LENGTH = 0x{imem_length:X}\n",
+            f"  DMEM (rw)  : ORIGIN = 0x{dmem['base']:08X}, LENGTH = 0x{dmem['size']:X}\n",
+            "}\n\n",
+            "SECTIONS\n",
+            "{\n",
+            "  .text :\n",
+            "  {\n",
+            "    KEEP(*(.text.start))\n",
+            "    *(.text .text.*)\n",
+            "  } > IMEM\n\n",
+            "  .rodata :\n",
+            "  {\n",
+            "    *(.rodata .rodata.*)\n",
+            "    *(.srodata .srodata.*)\n",
+            "    *(.eh_frame .eh_frame.*)\n",
+            "  } > IMEM\n\n",
+            "  .data :\n",
+            "  {\n",
+            "    . = ALIGN(4);\n",
+            "    __data_start = .;\n",
+            "    *(.data .data.*)\n",
+            "    *(.sdata .sdata.*)\n",
+            "    . = ALIGN(4);\n",
+            "    __data_end = .;\n",
+            "  } > DMEM AT > IMEM\n",
+            "  __data_load_start = LOADADDR(.data);\n",
+            "  PROVIDE(__global_pointer$ = __data_start + 0x800);\n\n",
+            "  .bss (NOLOAD) :\n",
+            "  {\n",
+            "    . = ALIGN(4);\n",
+            "    __bss_start = .;\n",
+            "    *(.bss .bss.*)\n",
+            "    *(.sbss .sbss.*)\n",
+            "    *(COMMON)\n",
+            "    . = ALIGN(4);\n",
+            "    __bss_end = .;\n",
+            "  } > DMEM\n\n",
+            "  . = ALIGN(16);\n",
+            "  __heap_start = .;\n",
+            "  __stack_top = (ORIGIN(DMEM) + LENGTH(DMEM)) & ~15;\n",
+            "  __heap_end = __stack_top;\n",
+            "  ASSERT(__heap_start <= __stack_top, \"DMEM overflow\")\n\n",
+            "  /DISCARD/ :\n",
+            "  {\n",
+            "    *(.comment)\n",
+            "    *(.note .note.*)\n",
+            "  }\n",
+            "}\n",
+        ]
+    )
+
+
+def render_demu_start(config, digest):
+    host_exit = next(
+        device
+        for device in config["simulation"]["devices"]
+        if device["type"] == "host_exit"
+    )
+    return "".join(
+        [
+            header("//", digest),
+            ".section .text.start, \"ax\", @progbits\n",
+            ".align 2\n",
+            ".globl _start\n",
+            ".type _start, @function\n\n",
+            "_start:\n",
+            "  .option push\n",
+            "  .option norelax\n",
+            "  la gp, __global_pointer$\n",
+            "  .option pop\n",
+            "  la sp, __stack_top\n\n",
+            "  la t0, __data_load_start\n",
+            "  la t1, __data_start\n",
+            "  la t2, __data_end\n",
+            ".Lcopy_data:\n",
+            "  bgeu t1, t2, .Lclear_bss_begin\n",
+            "  lw t3, 0(t0)\n",
+            "  sw t3, 0(t1)\n",
+            "  addi t0, t0, 4\n",
+            "  addi t1, t1, 4\n",
+            "  j .Lcopy_data\n\n",
+            ".Lclear_bss_begin:\n",
+            "  la t0, __bss_start\n",
+            "  la t1, __bss_end\n",
+            ".Lclear_bss:\n",
+            "  bgeu t0, t1, .Lcall_main\n",
+            "  sw zero, 0(t0)\n",
+            "  addi t0, t0, 4\n",
+            "  j .Lclear_bss\n\n",
+            ".Lcall_main:\n",
+            "  call main\n",
+            f"  li t0, 0x{host_exit['base']:08X}\n",
+            "  sw a0, 0(t0)\n",
+            ".Lhalt:\n",
+            "  j .Lhalt\n\n",
+            ".size _start, . - _start\n",
+        ]
+    )
+
+
+def render_sim_cmake(config, digest, project_root, output_dir):
+    verilator = config["flow"]["sim"]["verilator"]
+    simulation = config["simulation"]
+    rtl_top = config["rtl"]["top"]
+    sim_top = rtl_top if rtl_top.endswith("_sim_top") else f"{rtl_top}_sim_top"
+    sources = [
+        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
+    ]
+    include_dirs = [str(output_dir)] + [
+        absolute_project_path(project_root, path)
+        for path in config["rtl"]["include_dirs"]
+    ]
+    trace = "ON" if verilator["trace"] else "OFF"
+
+    def cmake_list(name, values):
+        body = "\n".join(f"  {cmake_quote(value)}" for value in values)
+        return f"set({name}\n{body}\n)\n"
+
+    return "".join(
+        [
+            header("#", digest),
+            f"set(SIM_PROJECT_ROOT {cmake_quote(project_root)})\n",
+            f"set(SIM_TOP {cmake_quote(sim_top)})\n",
+            f"set(SIM_RESET_CYCLES {simulation['reset_cycles']})\n",
+            f"set(SIM_MAX_CYCLES {simulation['max_cycles']})\n",
+            f"set(SIM_THREADS {verilator['threads']})\n",
+            f"set(SIM_TRACE {trace})\n",
+            f"set(SIM_DEVICE_COUNT {len(simulation['devices'])})\n",
+            *[
+                "".join(
+                    [
+                        f"set(SIM_DEVICE_{index}_NAME {cmake_quote(device['name'])})\n",
+                        f"set(SIM_DEVICE_{index}_TYPE {cmake_quote(device['type'])})\n",
+                        f"set(SIM_DEVICE_{index}_BASE {device['base']})\n",
+                        f"set(SIM_DEVICE_{index}_SIZE {device['size']})\n",
+                        f"set(SIM_DEVICE_{index}_LOAD_ADDRESS "
+                        f"{device.get('load_address', -1)})\n",
+                    ]
+                )
+                for index, device in enumerate(simulation["devices"])
+            ],
+            cmake_list("SIM_RTL_SOURCES", sources),
+            cmake_list("SIM_RTL_INCLUDE_DIRS", include_dirs),
+            cmake_list("SIM_VERILATOR_OPTIONS", verilator["options"]),
+        ]
+    )
+
+
 def make_escape(value):
     return value.replace("$", "$$").replace("#", "\\#")
 
@@ -940,6 +1459,7 @@ def render_makefile(config, digest, project_root):
     project_top = make_escape(config["rtl"]["top"])
     lint_tools = " ".join(make_escape(tool) for tool in config["flow"]["lint"])
     synth_tools = " ".join(make_escape(tool) for tool in config["flow"]["synth"])
+    sim_tools = " ".join(make_escape(tool) for tool in config["flow"]["sim"])
     workflow_stages = " ".join(config["workflow"]["stages"])
     rtl_sources = " ".join(make_project_path(path) for path in config["rtl"]["sources"])
     rtl_headers = " ".join(make_project_path(path) for path in config["rtl"]["headers"])
@@ -954,6 +1474,7 @@ def render_makefile(config, digest, project_root):
             f"BUILD_JOBS := {config['build']['jobs']}\n",
             f"LINT_TOOLS := {lint_tools}\n",
             f"SYNTH_TOOLS := {synth_tools}\n",
+            f"SIM_TOOLS := {sim_tools}\n",
             f"WORKFLOW_STAGES := {workflow_stages}\n",
             f"RTL_SOURCES := {rtl_sources}\n",
             f"RTL_HEADERS := {rtl_headers}\n",
@@ -972,6 +1493,8 @@ def render_environment(config, digest):
     rtl_top = shlex.quote(config["rtl"]["top"])
     lint = config["flow"]["lint"]
     synth = config["flow"]["synth"]
+    sim = config["flow"]["sim"]
+    simulation = config["simulation"]
     lines = [
         header("#", digest),
         f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
@@ -1000,6 +1523,42 @@ def render_environment(config, digest):
             [
                 f"SYNTH_DC_OPTION_COUNT={len(dc['options'])}\n",
                 shell_array("SYNTH_DC_OPTIONS", dc["options"]),
+            ]
+        )
+    lines.extend(
+        [
+            f"SIM_TOOL_COUNT={len(sim)}\n",
+            shell_array("SIM_TOOLS", sim),
+        ]
+    )
+    if "verilator" in sim:
+        verilator = sim["verilator"]
+        lines.extend(
+            [
+                f"SIM_RESET_CYCLES={simulation['reset_cycles']}\n",
+                f"SIM_MAX_CYCLES={simulation['max_cycles']}\n",
+                f"SIM_TRACE={'true' if verilator['trace'] else 'false'}\n",
+                f"SIM_DEVICE_COUNT={len(simulation['devices'])}\n",
+                shell_array(
+                    "SIM_DEVICE_NAMES",
+                    [device["name"] for device in simulation["devices"]],
+                ),
+                shell_array(
+                    "SIM_DEVICE_TYPES",
+                    [device["type"] for device in simulation["devices"]],
+                ),
+                shell_array(
+                    "SIM_DEVICE_BASES",
+                    [device["base"] for device in simulation["devices"]],
+                ),
+                shell_array(
+                    "SIM_DEVICE_SIZES",
+                    [device["size"] for device in simulation["devices"]],
+                ),
+                shell_array(
+                    "SIM_DEVICE_LOAD_ADDRESSES",
+                    [device.get("load_address", -1) for device in simulation["devices"]],
+                ),
             ]
         )
     lines.extend(
@@ -1038,6 +1597,21 @@ def render_outputs(config, config_path, project_root, output_dir):
                     config, digest, project_root, output_dir
                 ),
                 "synth.dc.tcl": render_dc_tcl(config, digest),
+            }
+        )
+    if "verilator" in config["flow"]["sim"]:
+        outputs.update(
+            {
+                "sim.cmake": render_sim_cmake(
+                    config, digest, project_root, output_dir
+                ),
+                "demu/generated/cfg.hh": render_demu_config(config, digest),
+                "demu/generated/devices.hh": render_demu_devices(config, digest),
+                "demu/generated/port_bindings.hh": render_demu_port_bindings(
+                    config, digest
+                ),
+                "demu/linker.ld": render_demu_linker(config, digest),
+                "demu/start.S": render_demu_start(config, digest),
             }
         )
 

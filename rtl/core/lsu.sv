@@ -33,7 +33,7 @@ module lsu
 
     write_data_o = store_data_i << (8 * byte_offset_i);
     write_strb_o = '0;
-    load_data_o = '0;
+    load_data_o  = '0;
     misaligned_o = 1'b0;
 
     unique case (size_i)
@@ -49,7 +49,7 @@ module lsu
 
       MEM_HALF: begin
         write_strb_o = byte_enable_t'(3) << byte_offset_i;
-        misaligned_o   = byte_offset_i[0];
+        misaligned_o = byte_offset_i[0];
 
         if (unsigned_i) begin
           load_data_o = {{($bits(word_t) - 16) {1'b0}}, selected_half};
@@ -60,13 +60,13 @@ module lsu
 
       MEM_WORD: begin
         write_strb_o = '1;
-        load_data_o = read_data_i;
+        load_data_o  = read_data_i;
         misaligned_o = |byte_offset_i;
       end
 
       default: begin
         write_strb_o = '0;
-        load_data_o = '0;
+        load_data_o  = '0;
         misaligned_o = 1'b1;
       end
     endcase

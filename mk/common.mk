@@ -14,6 +14,9 @@ RTL_FILELIST := $(GENERATED_DIR)/rtl.f
 RTL_TCL := $(GENERATED_DIR)/rtl.tcl
 CONSTRAINTS_SDC := $(GENERATED_DIR)/constraints.sdc
 SYNTH_DC_CONFIG := $(GENERATED_DIR)/synth.dc.tcl
+SIM_CONFIG_CMAKE := $(GENERATED_DIR)/sim.cmake
+SIM_CONFIG_HEADER := $(GENERATED_DIR)/demu/generated/cfg.hh
+SIM_DEVICES_HEADER := $(GENERATED_DIR)/demu/generated/devices.hh
 
 # Common utilities
 MKDIR := mkdir -p
@@ -35,7 +38,7 @@ init: dirs
 	@echo "[INIT] $(PROJECT_ROOT)/Project.toml"
 
 clean:
-	@$(MAKE) --no-print-directory config-clean lint-clean synth-clean
+	@$(MAKE) --no-print-directory config-clean lint-clean synth-clean sim-clean
 	@echo "[CLEAN] Generated flow outputs removed; virtual environment preserved"
 
 distclean:
@@ -53,6 +56,9 @@ help:
 	@echo "  config       Validate Project.toml and generate build configuration"
 	@echo "  lint         Run RTL lint"
 	@echo "  synth        Run RTL synthesis"
+	@echo "  sim          Build the configured RTL simulator"
+	@echo "  sim-build    Alias for sim"
+	@echo "  sim-run      Run the simulator with PROGRAM=path/to/program.bin"
 	@echo "  workflow     Run the ordered stages from Project.toml"
 	@echo "  clean        Remove generated flow outputs"
 	@echo "  distclean    Remove build directory and Project.toml"

@@ -1,0 +1,45 @@
+cmake_minimum_required(VERSION 3.8)
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+project(demu LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(NOT DEFINED PROJECT_CONFIG_CMAKE OR PROJECT_CONFIG_CMAKE STREQUAL "")
+  message(FATAL_ERROR "PROJECT_CONFIG_CMAKE must name generated sim.cmake")
+endif()
+if(NOT EXISTS "${PROJECT_CONFIG_CMAKE}")
+  message(FATAL_ERROR "Generated simulator configuration not found: ${PROJECT_CONFIG_CMAKE}")
+endif()
+include("${PROJECT_CONFIG_CMAKE}")
+
+get_filename_component(GENERATED_INCLUDE_DIR "${PROJECT_CONFIG_CMAKE}" DIRECTORY)
+set(TOP_MODULE "${SIM_TOP}")
+set(ENABLE_SIM ON)
+set(ENABLE_TRACE "${SIM_TRACE}")
+set(NUM_THREADS "${SIM_THREADS}")
+set(NUM_TRACE_THREADS 1)
+
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "RTL top: ${TOP_MODULE}")
+message(STATUS "Generated include: ${GENERATED_INCLUDE_DIR}")
+message(STATUS "Trace: ${ENABLE_TRACE}")
+message(STATUS "Threads: ${NUM_THREADS}")
+
+include(Helpers)
+include(CompilerSetup)
+include(Dependencies)
+include(SourceCollections)
+include(LibraryTargets)
+
+add_subdirectory(tools)

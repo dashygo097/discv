@@ -24,6 +24,7 @@ package core_types_pkg;
 
   typedef struct packed {
     addr_t     pc;
+    instr_t    instr;
     reg_addr_t rd;
     word_t     data;
     logic      write;
@@ -144,6 +145,7 @@ package core_types_pkg;
 
   typedef struct packed {
     addr_t        pc;
+    instr_t       instr;
     reg_addr_t    rs1;
     reg_addr_t    rs2;
     reg_addr_t    rd;
@@ -153,6 +155,7 @@ package core_types_pkg;
 
   typedef struct packed {
     addr_t        pc;
+    instr_t       instr;
     reg_addr_t    rd;
     word_t        rs1_data;
     word_t        rs2_data;
@@ -162,6 +165,7 @@ package core_types_pkg;
 
   typedef struct packed {
     addr_t          pc;
+    instr_t         instr;
     reg_addr_t      rd;
     word_t          result;
     word_t          store_data;
@@ -176,6 +180,7 @@ package core_types_pkg;
 
   typedef struct packed {
     addr_t     pc;
+    instr_t    instr;
     reg_addr_t rd;
     word_t     result;
     logic      reg_write;

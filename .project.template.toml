@@ -2,7 +2,7 @@ schema_version = 3
 
 [parameters]
 XLEN = 32
-RESET_VECTOR = 0x80000000
+RESET_VECTOR = 0x00000000
 
 [rtl]
 top = ""
@@ -50,6 +50,34 @@ required_variables = []
 # [flow.lint.spyglass]
 
 # [flow.lint.verilator]
+
+# [flow.sim.verilator]
+# threads = 1
+# trace = false
+# options = ["-Wall", "-Wno-fatal"]
+
+# [simulation]
+# reset_cycles = 5
+# max_cycles = 1000000
+
+# [[simulation.devices]]
+# name = "imem"
+# type = "tcm"
+# base = 0x00000000
+# size = 0x01000000
+# load_address = 0x00000000
+
+# [[simulation.devices]]
+# name = "dmem"
+# type = "tcm"
+# base = 0x80000000
+# size = 0x01000000
+
+# [[simulation.devices]]
+# name = "host_exit"
+# type = "host_exit"
+# base = 0x10000000
+# size = 0x00000004
 
 # [flow.synth.dc]
 # target_libraries = ["/absolute/path/to/slow.db"]
