@@ -9,7 +9,7 @@ module cpu
     handshake_if.sink   imem_rsp,
     handshake_if.source dmem_req,
     handshake_if.sink   dmem_rsp,
-    handshake_if.source retire
+    valid_if.source     retire
 );
 
   handshake_if #(.payload_t(if_id_payload_t)) if_id_input ();
@@ -445,11 +445,9 @@ module cpu
   end
 
   always_comb begin
-    mem_wb_output.ready = retire.ready;
+    mem_wb_output.ready = 1'b1;
 
-    regfile_write = mem_wb_output.valid &&
-        retire.ready &&
-        mem_wb_output.payload.reg_write &&
+    regfile_write = mem_wb_output.valid && mem_wb_output.payload.reg_write &&
         !mem_wb_output.payload.illegal;
 
     retire.valid = mem_wb_output.valid;

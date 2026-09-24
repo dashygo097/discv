@@ -39,7 +39,7 @@ module cpu_sim_top
   handshake_if #(.payload_t(imem_rsp_t)) imem_rsp ();
   handshake_if #(.payload_t(dmem_req_t)) dmem_req ();
   handshake_if #(.payload_t(dmem_rsp_t)) dmem_rsp ();
-  handshake_if #(.payload_t(retire_lane_t)) retire ();
+  valid_if #(.payload_t(retire_lane_t)) retire ();
 
   always_comb begin
     imem_rsp.valid   = imem_rsp_valid_i;
@@ -61,7 +61,6 @@ module cpu_sim_top
     dmem_req_strb_o  = dmem_req.payload.strb;
     dmem_rsp_ready_o = dmem_rsp.ready;
 
-    retire.ready     = 1'b1;
     retire_valid_o   = retire.valid;
     retire_pc_o      = retire.payload.pc;
     retire_instr_o   = retire.payload.instr;

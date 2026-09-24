@@ -1,9 +1,7 @@
 package core_types_pkg;
   import riscv_pkg::*;
 
-  typedef struct packed {
-    addr_t addr;
-  } imem_req_t;
+  typedef struct packed {addr_t addr;} imem_req_t;
 
   typedef struct packed {
     instr_t data;
