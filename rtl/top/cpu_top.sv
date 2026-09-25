@@ -1,4 +1,4 @@
-module cpu_sim_top
+module cpu_top
   import riscv_pkg::*;
   import core_types_pkg::*;
 (

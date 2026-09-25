@@ -24,7 +24,7 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.8.0"
+GENERATOR_VERSION = "0.9.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
@@ -35,6 +35,9 @@ MANAGED_OUTPUT_NAMES = {
     "constraints.sdc",
     "demu/generated/cfg.hh",
     "demu/generated/devices.hh",
+    "demu/generated/platform.hh",
+    "demu/generated/demu_platform_pkg.sv",
+    "demu/generated/platform_pkg.sv",
     "demu/generated/port_bindings.hh",
     "demu/linker.ld",
     "demu/start.S",
@@ -122,9 +125,10 @@ def configuration_path(project_root, value, location, suffix=None):
     if "$" in value:
         raise ConfigError(f"{location}: environment-variable expansion is not supported")
     path = Path(value)
-    if not path.is_absolute():
-        path = project_root / path
-    normalized = path.resolve()
+    if path.is_absolute():
+        normalized = Path(os.path.normpath(value))
+    else:
+        normalized = (project_root / path).resolve()
     if suffix is not None and normalized.suffix.lower() != suffix:
         raise ConfigError(f"{location}: expected a {suffix} file: {value}")
     return str(normalized)
@@ -579,9 +583,37 @@ def normalize_simulation(raw, parameters, *, required):
         raise ConfigError("simulation: expected a table")
     reject_unknown(
         simulation,
-        {"reset_cycles", "max_cycles", "devices"},
+        {"reset_cycles", "max_cycles", "ports", "devices"},
         "simulation",
     )
+
+    ports = simulation.get("ports", [])
+    if not isinstance(ports, list):
+        raise ConfigError("simulation.ports: expected an array of tables")
+    normalized_ports = []
+    port_names = set()
+    for index, port in enumerate(ports):
+        location = f"simulation.ports[{index}]"
+        if not isinstance(port, dict):
+            raise ConfigError(f"{location}: expected a table")
+        reject_unknown(port, {"name", "protocol"}, location)
+        name = require_string(port, "name", location)
+        if not IDENTIFIER.match(name):
+            raise ConfigError(f"{location}.name: expected an identifier")
+        if name in port_names:
+            raise ConfigError(f"{location}.name: duplicate port name: {name}")
+        port_names.add(name)
+        protocol = require_string(port, "protocol", location)
+        if protocol != "virt":
+            raise ConfigError(
+                f'{location}.protocol: only "virt" is currently implemented'
+            )
+        normalized_ports.append(
+            {
+                "name": name,
+                "protocol": protocol,
+            }
+        )
 
     devices = simulation.get("devices", [])
     if not isinstance(devices, list):
@@ -650,10 +682,15 @@ def normalize_simulation(raw, parameters, *, required):
                 f"{previous['name']} and {current['name']}"
             )
 
-    if required and not normalized_devices:
-        raise ConfigError(
-            "simulation.devices: expected at least one device when simulation is enabled"
-        )
+    if required:
+        if not normalized_ports:
+            raise ConfigError(
+                "simulation.ports: expected at least one port when simulation is enabled"
+            )
+        if not normalized_devices:
+            raise ConfigError(
+                "simulation.devices: expected at least one device when simulation is enabled"
+            )
     reset_vector = parameters.get("RESET_VECTOR")
     if required and (
         isinstance(reset_vector, bool) or not isinstance(reset_vector, int)
@@ -662,6 +699,12 @@ def normalize_simulation(raw, parameters, *, required):
             "simulation: parameters.RESET_VECTOR must be an integer"
         )
     if required:
+        port_names = {port["name"] for port in normalized_ports}
+        for name in ("imem", "dmem"):
+            if name not in port_names:
+                raise ConfigError(
+                    f'simulation.ports: required virtual port is missing: "{name}"'
+                )
         devices_by_name = {
             device["name"]: device for device in normalized_devices
         }
@@ -705,6 +748,7 @@ def normalize_simulation(raw, parameters, *, required):
             positive=True,
             maximum=0xFFFFFFFFFFFFFFFF,
         ),
+        "ports": normalized_ports,
         "devices": normalized_devices,
     }
 
@@ -728,8 +772,8 @@ def load_config(config_path, project_root):
         },
         "<root>",
     )
-    if raw.get("schema_version") != 3:
-        raise ConfigError("schema_version: expected integer 3")
+    if raw.get("schema_version") != 4:
+        raise ConfigError("schema_version: expected integer 4")
 
     parameters = require_table(raw, "parameters")
     normalized_parameters = {}
@@ -858,7 +902,7 @@ def load_config(config_path, project_root):
         raise ConfigError("workflow.stages: duplicate stages are not allowed")
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "parameters": normalized_parameters,
         "rtl": {
             "top": top,
@@ -1173,15 +1217,25 @@ def render_demu_config(config, digest):
     )
 
 
-def render_demu_devices(config, digest):
-    devices = config["simulation"]["devices"]
+def render_demu_platform(config, digest):
+    simulation = config["simulation"]
+    ports = simulation["ports"]
+    devices = simulation["devices"]
     type_names = {
         "tcm": "TCM",
         "host_exit": "HostExit",
     }
-    entries = []
+    port_entries = []
+    for port in ports:
+        port_entries.append(
+            "    PortDescriptor{"
+            f"{cpp_string(port['name'])}, "
+            "hal::BusProtocol::Virt"
+            "}"
+        )
+    device_entries = []
     for device in devices:
-        entries.append(
+        device_entries.append(
             "    DeviceDescriptor{"
             f"{cpp_string(device['name'])}, "
             f"hal::DeviceType::{type_names[device['type']]}, "
@@ -1190,93 +1244,41 @@ def render_demu_devices(config, digest):
             f"UINT64_C({device.get('load_address', 0)})"
             "}"
         )
-    device_entries = ",\n".join(entries)
     return "".join(
         [
             header("//", digest),
             "#pragma once\n\n",
-            '#include "demu/hal/device.hh"\n',
+            '#include "demu/hal/platform.hh"\n',
             "#include <array>\n",
             "#include <cstdint>\n",
             "\nnamespace demu::generated {\n\n",
             "using hal::DeviceDescriptor;\n\n",
+            "using hal::PortDescriptor;\n\n",
+            f"inline constexpr std::array<PortDescriptor, {len(ports)}> "
+            "PORTS{{\n",
+            ",\n".join(port_entries),
+            "\n}};\n\n",
             f"inline constexpr std::array<DeviceDescriptor, {len(devices)}> DEVICES{{{{\n",
-            device_entries,
+            ",\n".join(device_entries),
             "\n}};\n\n",
             "} // namespace demu::generated\n",
         ]
     )
 
 
-def render_demu_port_bindings(config, digest):
-    devices = config["simulation"]["devices"]
-    rtl_top = config["rtl"]["top"]
-    sim_top = rtl_top if rtl_top.endswith("_sim_top") else f"{rtl_top}_sim_top"
-    verilated_top = f"V{sim_top}"
-    device_types = {
-        "tcm": ("hal::tcm::TCM", "demu/hal/peripheral/tcm/tcm.hh"),
-        "host_exit": (
-            "hal::host_exit::HostExit",
-            "demu/hal/peripheral/host_exit/host_exit.hh",
-        ),
-    }
-    includes = sorted({device_types[device["type"]][1] for device in devices})
-    registrations = [
-        f"  manager.register_device<{device_types[device['type']][0]}>("
-        f"{index}, DEVICES[{index}]);\n"
-        for index, device in enumerate(devices)
+def render_demu_platform_package(config, digest):
+    ports = config["simulation"]["ports"]
+    port_constants = [
+        f"  localparam int unsigned {port['name'].upper()}_PORT = {index};"
+        for index, port in enumerate(ports)
     ]
     return "".join(
         [
             header("//", digest),
-            "#pragma once\n\n",
-            f'#include "{verilated_top}.h"\n',
-            '#include "demu/generated/devices.hh"\n',
-            '#include "demu/hal/bus/virt/port_handler.hh"\n',
-            '#include "demu/hal/device_manager.hh"\n',
-            *[f'#include "{path}"\n' for path in includes],
-            "\nnamespace demu::generated {\n\n",
-            f"inline auto bind_imem({verilated_top} *dut) noexcept\n",
-            "    -> hal::virt::PortSignals {\n",
-            "  return hal::virt::PortSignals{\n",
-            "      &dut->imem_req_valid_o, &dut->imem_req_ready_i,\n",
-            "      &dut->imem_req_addr_o,  nullptr,\n",
-            "      nullptr,                nullptr,\n",
-            "      &dut->imem_rsp_valid_i, &dut->imem_rsp_ready_o,\n",
-            "      &dut->imem_rsp_data_i,  &dut->imem_rsp_error_i};\n",
-            "}\n\n",
-            f"inline auto bind_dmem({verilated_top} *dut) noexcept\n",
-            "    -> hal::virt::PortSignals {\n",
-            "  return hal::virt::PortSignals{\n",
-            "      &dut->dmem_req_valid_o, &dut->dmem_req_ready_i,\n",
-            "      &dut->dmem_req_addr_o,  &dut->dmem_req_write_o,\n",
-            "      &dut->dmem_req_data_o,  &dut->dmem_req_strb_o,\n",
-            "      &dut->dmem_rsp_valid_i, &dut->dmem_rsp_ready_o,\n",
-            "      &dut->dmem_rsp_data_i,  &dut->dmem_rsp_error_i};\n",
-            "}\n\n",
-            f"inline void register_devices(hal::DeviceManager &manager, "
-            f"{verilated_top} *dut) {{\n",
-            "  if (dut == nullptr) {\n",
-            '    HAL_ERROR("Cannot register devices for a null DUT")\n',
-            "  }\n\n",
-            *registrations,
+            "package demu_platform_pkg;\n\n",
+            "\n".join(port_constants),
             "\n",
-            "  manager.register_handler(\n",
-            "      std::make_unique<hal::virt::PortHandler>(\n",
-            "          bind_imem(dut),\n",
-            "          [&manager](addr_t address, bool, word_t, byte_t) {\n",
-            "            return manager.read_instruction(address);\n",
-            "          }));\n",
-            "  manager.register_handler(\n",
-            "      std::make_unique<hal::virt::PortHandler>(\n",
-            "          bind_dmem(dut),\n",
-            "          [&manager](addr_t address, bool write, word_t data,\n",
-            "                     byte_t strb) {\n",
-            "            return manager.access_data(address, write, data, strb);\n",
-            "          },\n",
-            "          [&manager]() { manager.complete_data_response(); }));\n",
-            "}\n\n",
-            "} // namespace demu::generated\n",
+            "endpackage\n",
         ]
     )
 
@@ -1402,9 +1404,10 @@ def render_demu_start(config, digest):
 def render_sim_cmake(config, digest, project_root, output_dir):
     verilator = config["flow"]["sim"]["verilator"]
     simulation = config["simulation"]
-    rtl_top = config["rtl"]["top"]
-    sim_top = rtl_top if rtl_top.endswith("_sim_top") else f"{rtl_top}_sim_top"
+    sim_top = "demu_sim_top"
     sources = [
+        str((output_dir / "demu/generated/demu_platform_pkg.sv").resolve())
+    ] + [
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     ]
     include_dirs = [str(output_dir)] + [
@@ -1606,8 +1609,8 @@ def render_outputs(config, config_path, project_root, output_dir):
                     config, digest, project_root, output_dir
                 ),
                 "demu/generated/cfg.hh": render_demu_config(config, digest),
-                "demu/generated/devices.hh": render_demu_devices(config, digest),
-                "demu/generated/port_bindings.hh": render_demu_port_bindings(
+                "demu/generated/platform.hh": render_demu_platform(config, digest),
+                "demu/generated/demu_platform_pkg.sv": render_demu_platform_package(
                     config, digest
                 ),
                 "demu/linker.ld": render_demu_linker(config, digest),

@@ -1,5 +1,5 @@
 #include "demu/sim.hh"
-#include "demu/generated/port_bindings.hh"
+#include "demu/dpi/runtime.hh"
 #include "demu/logger.hh"
 #include <chrono>
 
@@ -17,11 +17,13 @@ DemuSimulator::DemuSimulator(bool enabled_trace, int threads, int argc,
     context_->traceEverOn(true);
   }
 
-  dut_ = std::make_unique<Vcpu_sim_top>(context_.get(), "TOP");
+  dut_ = std::make_unique<Vdemu_sim_top>(context_.get(), "TOP");
   device_manager_ = std::make_unique<hal::DeviceManager>();
+  dpi::bind(*this);
 }
 
 DemuSimulator::~DemuSimulator() {
+  dpi::unbind(*this);
   dut_->final();
 #ifdef ENABLE_TRACE
   if (vcd_) {
@@ -37,7 +39,9 @@ auto DemuSimulator::load_bin(const std::string &filename) -> bool {
 void DemuSimulator::init() {
   DEMU_INFO("DEMU Simulator Initializing...")
 
-  generated::register_devices(*device_manager_, dut_.get());
+  if (!device_manager_->configure()) {
+    DEMU_ERROR("Failed to configure the simulated platform")
+  }
   device_manager_->dump_device_map();
 
 #ifdef ENABLE_TRACE
@@ -60,6 +64,7 @@ void DemuSimulator::reset(std::uint64_t cycles) {
   dut_->rst_n_i = 0;
   terminate_ = false;
   exit_code_ = 0;
+  device_manager_->reset();
 
   for (std::uint64_t cycle = 0; cycle < cycles; ++cycle) {
     clock_tick();
@@ -67,7 +72,6 @@ void DemuSimulator::reset(std::uint64_t cycles) {
   dut_->rst_n_i = 1;
   dut_->eval();
 
-  device_manager_->reset();
   cycle_count_ = 0;
   instret_count_ = 0;
   last_retire_pc_ = 0;
@@ -111,26 +115,25 @@ void DemuSimulator::run(std::uint64_t max_cycles) {
   }
 }
 
-void DemuSimulator::handle_retirement() {
-  if (!dut_->retire_valid_o) {
-    return;
-  }
+void DemuSimulator::accept_retirement(addr_t pc, instr_t instruction,
+                                      std::uint8_t rd, word_t data,
+                                      bool write, bool illegal) noexcept {
   ++instret_count_;
-  last_retire_pc_ = dut_->retire_pc_o;
+  last_retire_pc_ = pc;
 
-  if (dut_->retire_write_o && dut_->retire_rd_o < NUM_ARCH_REGS) {
-    register_values_[dut_->retire_rd_o] = dut_->retire_data_o;
-    DEMU_REG_WRITE(dut_->retire_rd_o, dut_->retire_data_o)
+  if (write && rd < NUM_ARCH_REGS) {
+    register_values_[rd] = data;
+    DEMU_REG_WRITE(rd, data)
   }
   if (Logger::demu_should_log(spdlog::level::trace)) {
     DEMU_TRACE("[RETIRE] Cycle {:6d} | PC=0x{:08x} | Instr=0x{:08x}",
-               cycle_count_, last_retire_pc_, dut_->retire_instr_o)
+               cycle_count_, last_retire_pc_, instruction)
   } else if (Logger::demu_should_log(spdlog::level::debug)) {
     DEMU_DEBUG("[RETIRE] Cycle {:6d} | PC=0x{:08x} | Instr=0x{:08x}",
-               cycle_count_, last_retire_pc_, dut_->retire_instr_o)
+               cycle_count_, last_retire_pc_, instruction)
   }
 
-  if (dut_->retire_illegal_o) {
+  if (illegal) {
     exit_code_ = 1;
     terminate_ = true;
     DEMU_WARN("Illegal instruction retired at PC 0x{:08x}", last_retire_pc_)
@@ -142,7 +145,6 @@ void DemuSimulator::clock_tick() {
 
   context_->timeInc(1);
   dut_->clk_i = 0;
-  device_manager_->handle_ports();
   dut_->eval();
 #ifdef ENABLE_TRACE
   if (vcd_) {
@@ -154,10 +156,11 @@ void DemuSimulator::clock_tick() {
   dut_->clk_i = 1;
   dut_->eval();
   device_manager_->clock_tick();
-  handle_retirement();
-  if (const auto code = device_manager_->take_exit_code(); code.has_value()) {
-    exit_code_ = *code;
-    terminate_ = true;
+  while (const auto event = device_manager_->take_event()) {
+    if (event->type == hal::DeviceEventType::Exit) {
+      exit_code_ = event->value;
+      terminate_ = true;
+    }
   }
 
   ++cycle_count_;
@@ -167,6 +170,23 @@ void DemuSimulator::clock_tick() {
     vcd_->dump(context_->time());
   }
 #endif
+}
+
+auto DemuSimulator::submit_transaction(
+    hal::port_id_t port, const hal::Transaction &transaction) noexcept
+    -> std::optional<hal::transaction_id_t> {
+  return device_manager_->submit(port, transaction);
+}
+
+auto DemuSimulator::poll_transaction(
+    hal::transaction_id_t transaction) noexcept
+    -> std::optional<hal::Response> {
+  return device_manager_->poll(transaction);
+}
+
+auto DemuSimulator::complete_transaction(
+    hal::transaction_id_t transaction) noexcept -> bool {
+  return device_manager_->complete(transaction);
 }
 
 void DemuSimulator::dump_registers() const {

@@ -6,6 +6,30 @@
 
 namespace demu::hal::tcm {
 
+auto TCM::submit(transaction_id_t, const Transaction &transaction) noexcept
+    -> std::optional<Response> {
+  if (transaction.size != sizeof(word_t)) {
+    return Response{ResponseStatus::Unsupported};
+  }
+
+  const addr_t aligned_address = transaction.address & ~addr_t{0x3U};
+  if (!memory_->is_valid_range(aligned_address, sizeof(word_t))) {
+    return Response{ResponseStatus::DecodeError};
+  }
+
+  if (transaction.access == AccessType::Write) {
+    for (std::uint32_t byte = 0; byte < sizeof(word_t); ++byte) {
+      if ((transaction.strobe & (byte_t{1} << byte)) != 0) {
+        memory_->write_byte(
+            aligned_address + byte,
+            static_cast<byte_t>(transaction.data >> (byte * 8U)));
+      }
+    }
+    return Response{};
+  }
+  return Response{ResponseStatus::Okay, memory_->read_word(aligned_address)};
+}
+
 void TCM::clock_tick() {}
 
 void TCM::reset() { memory_->clear(); }

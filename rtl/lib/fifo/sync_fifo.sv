@@ -16,7 +16,7 @@ module sync_fifo #(
 
   payload_t storage[DEPTH];
 
-  logic [COUNT_WIDTH - 1:0] counter_r;
+  logic [CNT_WIDTH - 1:0] counter_r;
   logic [PTR_WIDTH - 1:0] w_ptr_r;
   logic [PTR_WIDTH - 1:0] r_ptr_r;
 
@@ -25,7 +25,7 @@ module sync_fifo #(
 
   always_comb begin
     empty_o = (counter_r == '0);
-    full_o = (counter_r == COUNT_WIDTH'(DEPTH));
+    full_o = (counter_r == CNT_WIDTH'(DEPTH));
 
     out.valid = !empty_o;
     out.payload = storage[r_ptr_r];

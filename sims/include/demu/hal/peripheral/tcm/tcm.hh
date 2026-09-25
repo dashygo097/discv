@@ -2,11 +2,12 @@
 
 #include "demu/hal/allocator.hh"
 #include "demu/hal/device.hh"
+#include "demu/hal/transaction.hh"
 #include <memory>
 
 namespace demu::hal::tcm {
 
-class TCM final : public Device {
+class TCM final : public Device, public MmioTarget {
 public:
   explicit TCM(const DeviceDescriptor &desc)
       : Device(desc),
@@ -17,6 +18,10 @@ public:
   [[nodiscard]] auto allocator() const noexcept -> MemoryAllocator * override {
     return memory_.get();
   }
+
+  [[nodiscard]] auto submit(transaction_id_t id,
+                            const Transaction &transaction) noexcept
+      -> std::optional<Response> override;
 
   void clock_tick() override;
   void reset() override;

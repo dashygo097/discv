@@ -1,12 +1,14 @@
 #pragma once
 
-#include "Vcpu_sim_top.h"
+#include "Vdemu_sim_top.h"
 #include "demu/hal/device_manager.hh"
+#include "demu/hal/transaction.hh"
 #include "demu/types.hh"
 #include "verilated.h"
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #ifdef ENABLE_TRACE
@@ -58,9 +60,20 @@ public:
   void dump_registers() const;
   void dump_memory(addr_t start, std::size_t size) const;
 
+  [[nodiscard]] auto
+  submit_transaction(hal::port_id_t port,
+                     const hal::Transaction &transaction) noexcept
+      -> std::optional<hal::transaction_id_t>;
+  [[nodiscard]] auto
+  poll_transaction(hal::transaction_id_t transaction) noexcept
+      -> std::optional<hal::Response>;
+  auto complete_transaction(hal::transaction_id_t transaction) noexcept -> bool;
+  void accept_retirement(addr_t pc, instr_t instruction, std::uint8_t rd,
+                         word_t data, bool write, bool illegal) noexcept;
+
 protected:
   std::unique_ptr<VerilatedContext> context_;
-  std::unique_ptr<Vcpu_sim_top> dut_;
+  std::unique_ptr<Vdemu_sim_top> dut_;
   std::unique_ptr<hal::DeviceManager> device_manager_;
 
 #ifdef ENABLE_TRACE
@@ -74,7 +87,6 @@ protected:
 
 private:
   void clock_tick();
-  void handle_retirement();
 
   std::uint64_t timeout_{1000000};
   std::uint64_t cycle_count_{0};

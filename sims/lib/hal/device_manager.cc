@@ -1,14 +1,89 @@
 #include "demu/hal/device_manager.hh"
+#include "demu/generated/platform.hh"
+#include "demu/hal/peripheral/host_exit/host_exit.hh"
+#include "demu/hal/peripheral/tcm/tcm.hh"
 #include "demu/logger.hh"
+#include <utility>
 
 namespace demu::hal {
 
-auto DeviceManager::load_binary(const std::string &filename) -> bool {
-  for (auto &slot : slots_) {
-    if (!slot.device || !slot.desc.load) {
-      continue;
+namespace {
+
+void trace_transaction(const Transaction &transaction,
+                       const Response &response) noexcept {
+  if (response.error()) {
+    return;
+  }
+  if (transaction.access == AccessType::Write) {
+    DEMU_MEM_TRACE("WRITE", transaction.address, transaction.data)
+  } else {
+    DEMU_MEM_TRACE("READ", transaction.address, response.data)
+  }
+}
+
+} // namespace
+
+auto DeviceManager::configure() -> bool {
+  ports_.clear();
+  devices_.clear();
+  device_map_.clear();
+  name_indices_.clear();
+  pending_.clear();
+  events_.clear();
+  next_transaction_ = 1;
+
+  ports_.assign(generated::PORTS.begin(), generated::PORTS.end());
+  devices_.reserve(generated::DEVICES.size());
+
+  for (const auto &desc : generated::DEVICES) {
+    std::unique_ptr<Device> device;
+    switch (desc.type) {
+    case DeviceType::TCM:
+      device = std::make_unique<tcm::TCM>(desc);
+      break;
+    case DeviceType::HostExit:
+      device = std::make_unique<host_exit::HostExit>(desc);
+      break;
     }
 
+    if (!device) {
+      HAL_WARN("Invalid device descriptor '{}'", desc.name)
+      return false;
+    }
+
+    const auto first = device->base_address();
+    const auto last = first + static_cast<addr_t>(device->address_range() - 1);
+    auto next = device_map_.lower_bound(first);
+    if (next != device_map_.end() && next->first <= last) {
+      HAL_WARN("Device '{}' overlaps device '{}'", desc.name,
+               next->second->name())
+      return false;
+    }
+    if (next != device_map_.begin()) {
+      const auto previous = std::prev(next);
+      const auto previous_last =
+          previous->first +
+          static_cast<addr_t>(previous->second->address_range() - 1);
+      if (previous_last >= first) {
+        HAL_WARN("Device '{}' overlaps device '{}'", desc.name,
+                 previous->second->name())
+        return false;
+      }
+    }
+
+    const auto id = static_cast<device_id_t>(devices_.size());
+    name_indices_.emplace(std::string(desc.name), id);
+    device_map_.emplace(first, device.get());
+    devices_.push_back(DeviceSlot{desc, std::move(device)});
+  }
+  return true;
+}
+
+auto DeviceManager::load_binary(const std::string &filename) -> bool {
+  for (auto &slot : devices_) {
+    if (!slot.desc.load) {
+      continue;
+    }
     if (slot.device->allocator() == nullptr) {
       HAL_WARN("Load device '{}' has no mapped storage", slot.desc.name)
       return false;
@@ -16,239 +91,166 @@ auto DeviceManager::load_binary(const std::string &filename) -> bool {
     return slot.device->load_binary(
         filename, static_cast<addr_t>(slot.desc.load_address));
   }
-
-  HAL_WARN("No configured TCM device has a load address")
+  HAL_WARN("No configured device has a load address")
   return false;
 }
 
-// Device Retrieval — by port
-auto DeviceManager::get_device(port_id_t port) noexcept -> Device * {
-  if (port >= slots_.size()) {
-    return nullptr;
-  }
-  return slots_[port].device.get();
-}
-
-auto DeviceManager::get_device(port_id_t port) const noexcept
-    -> const Device * {
-  if (port >= slots_.size()) {
-    return nullptr;
-  }
-  return slots_[port].device.get();
-}
-
-// Device Retrieval — by name
 auto DeviceManager::get_device_by_name(std::string_view name) noexcept
     -> Device * {
-  auto it = name_indices_.find(std::string(name));
-  if (it == name_indices_.end()) {
-    return nullptr;
-  }
-  return get_device(it->second);
+  const auto found = name_indices_.find(std::string(name));
+  return found == name_indices_.end() ? nullptr
+                                      : devices_[found->second].device.get();
 }
 
 auto DeviceManager::get_device_by_name(std::string_view name) const noexcept
     -> const Device * {
-  auto it = name_indices_.find(std::string(name));
-  if (it == name_indices_.end()) {
-    return nullptr;
-  }
-  return get_device(it->second);
+  const auto found = name_indices_.find(std::string(name));
+  return found == name_indices_.end() ? nullptr
+                                      : devices_[found->second].device.get();
 }
 
-// Device Retrieval — by address
-auto DeviceManager::find_device_for_address(addr_t addr) noexcept -> Device * {
-  if (addr_indices_.empty()) {
+auto DeviceManager::find_device_for_address(addr_t address) noexcept
+    -> Device * {
+  if (device_map_.empty()) {
     return nullptr;
   }
-
-  auto it = addr_indices_.upper_bound(addr);
-  if (it == addr_indices_.begin()) {
+  auto target = device_map_.upper_bound(address);
+  if (target == device_map_.begin()) {
     return nullptr;
   }
-
-  --it;
-  auto *device = get_device(it->second);
-  if (device && device->owns_address(addr)) {
-    HAL_TRACE("Address 0x{:08X} mapped to device '{}' (Port {})", addr,
-              slots_[it->second].desc.name, it->second);
-    return device;
-  }
-
-  HAL_WARN("No device device owns address 0x{:08X}", addr);
-  return nullptr;
+  --target;
+  return target->second->owns_address(address) ? target->second : nullptr;
 }
 
-auto DeviceManager::find_device_for_address(addr_t addr) const noexcept
+auto DeviceManager::find_device_for_address(addr_t address) const noexcept
     -> const Device * {
-  if (addr_indices_.empty()) {
+  if (device_map_.empty()) {
     return nullptr;
   }
-
-  auto it = addr_indices_.upper_bound(addr);
-  if (it == addr_indices_.begin()) {
+  auto target = device_map_.upper_bound(address);
+  if (target == device_map_.begin()) {
     return nullptr;
   }
-
-  --it;
-  const auto *device = get_device(it->second);
-  if (device && device->owns_address(addr)) {
-    HAL_TRACE("Address 0x{:08X} mapped to device '{}' (Port {})", addr,
-              slots_[it->second].desc.name, it->second);
-    return device;
-  }
-  return nullptr;
+  --target;
+  return target->second->owns_address(address) ? target->second : nullptr;
 }
 
-// Port Handlers and device access
-void DeviceManager::register_handler(std::unique_ptr<PortHandler> handler) {
-  HAL_DEBUG("Registered '{}' handler", handler->protocol_name());
-  handlers_.push_back(std::move(handler));
-}
-
-void DeviceManager::handle_ports() noexcept {
-  for (auto &handler : handlers_) {
-    handler->handle();
-  }
-}
-
-auto DeviceManager::read_instruction(addr_t address) noexcept
-    -> DeviceAccessResult {
-  if ((address & addr_t{0x3U}) != 0) {
-    HAL_WARN("Unaligned instruction read at 0x{:08x}", address)
-    return DeviceAccessResult{0, true};
+auto DeviceManager::submit(port_id_t port,
+                           const Transaction &transaction) noexcept
+    -> std::optional<transaction_id_t> {
+  if (port >= ports_.size()) {
+    HAL_WARN("Transaction targets invalid port {}", port)
+    return std::nullopt;
   }
 
-  auto *target = find_device_for_address(address);
+  const auto &port_desc = ports_[port];
+  if (port_desc.protocol != BusProtocol::Virt) {
+    HAL_WARN("Port '{}' has an unsupported protocol", port_desc.name)
+    return std::nullopt;
+  }
+
+  auto *device = find_device_for_address(transaction.address);
+  const auto id = next_transaction_++;
+  if (device == nullptr) {
+    HAL_WARN("No device on '{}' owns address 0x{:08x}", port_desc.name,
+             transaction.address)
+    pending_.emplace(id,
+                     PendingTransaction{
+                         nullptr,
+                         transaction,
+                         Response{ResponseStatus::DecodeError},
+                     });
+    return id;
+  }
+
+  auto *target = dynamic_cast<MmioTarget *>(device);
   if (target == nullptr) {
-    HAL_WARN("Invalid instruction read at 0x{:08x}", address)
-    return DeviceAccessResult{0, true};
+    HAL_WARN("Device '{}' is not an MMIO target", device->name())
+    pending_.emplace(id,
+                     PendingTransaction{
+                         nullptr,
+                         transaction,
+                         Response{ResponseStatus::Unsupported},
+                     });
+    return id;
   }
 
-  const auto result = target->access(address, false, 0, 0);
-  if (!result.error) {
-    DEMU_MEM_TRACE("IFETCH", address, result.data)
+  auto response = target->submit(id, transaction);
+  if (response.has_value()) {
+    trace_transaction(transaction, *response);
   }
-  return result;
+  pending_.emplace(
+      id, PendingTransaction{target, transaction, std::move(response)});
+  return id;
 }
 
-auto DeviceManager::access_data(addr_t address, bool write, word_t data,
-                                byte_t strb) noexcept -> DeviceAccessResult {
-  const addr_t aligned_address = address & ~addr_t{0x3U};
-  auto *target = find_device_for_address(aligned_address);
-  if (target == nullptr) {
-    HAL_WARN("Invalid data access at 0x{:08x}", address)
-    return DeviceAccessResult{0, true};
+auto DeviceManager::poll(transaction_id_t transaction) noexcept
+    -> std::optional<Response> {
+  auto found = pending_.find(transaction);
+  if (found == pending_.end()) {
+    return std::nullopt;
   }
 
-  const auto result = target->access(address, write, data, strb);
-  if (result.error) {
-    HAL_WARN("Device '{}' rejected access at 0x{:08x}", target->name(), address)
-    return result;
-  }
-
-  if (write) {
-    if (const auto exit_code = target->take_exit_code();
-        exit_code.has_value()) {
-      pending_exit_code_ = exit_code;
+  auto &pending = found->second;
+  if (!pending.response.has_value() && pending.target != nullptr) {
+    pending.response = pending.target->poll(transaction);
+    if (pending.response.has_value()) {
+      trace_transaction(pending.request, *pending.response);
     }
-    DEMU_MEM_TRACE("WRITE", address, data)
-  } else {
-    DEMU_MEM_TRACE("READ", address, result.data)
   }
-  return result;
+  return pending.response;
 }
 
-void DeviceManager::complete_data_response() noexcept {
-  if (pending_exit_code_.has_value()) {
-    completed_exit_code_ = pending_exit_code_;
-    pending_exit_code_.reset();
+auto DeviceManager::complete(transaction_id_t transaction) noexcept -> bool {
+  const auto found = pending_.find(transaction);
+  if (found == pending_.end()) {
+    return false;
   }
+  auto &pending = found->second;
+  if (!pending.response.has_value()) {
+    return false;
+  }
+  if (pending.target != nullptr) {
+    pending.target->complete(transaction);
+  }
+  if (pending.response->event.type != DeviceEventType::None) {
+    events_.push_back(pending.response->event);
+  }
+  pending_.erase(found);
+  return true;
 }
 
-auto DeviceManager::take_exit_code() noexcept -> std::optional<word_t> {
-  auto exit_code = completed_exit_code_;
-  completed_exit_code_.reset();
-  return exit_code;
+auto DeviceManager::take_event() noexcept -> std::optional<DeviceEvent> {
+  if (events_.empty()) {
+    return std::nullopt;
+  }
+  const auto event = events_.front();
+  events_.pop_front();
+  return event;
 }
 
-// Bulk Operations
 void DeviceManager::reset() noexcept {
-  HAL_DEBUG("Resetting all emulated hardware devices...");
-  pending_exit_code_.reset();
-  completed_exit_code_.reset();
-
-  for (auto &handler : handlers_) {
-    handler->reset();
-  }
-  for (auto &slot : slots_) {
-    if (slot.device) {
-      slot.device->reset();
-    }
+  pending_.clear();
+  events_.clear();
+  next_transaction_ = 1;
+  for (auto &slot : devices_) {
+    slot.device->reset();
   }
 }
 
 void DeviceManager::clock_tick() noexcept {
-  for (auto &slot : slots_) {
-    if (slot.device) {
-      slot.device->clock_tick();
-    }
+  for (auto &slot : devices_) {
+    slot.device->clock_tick();
   }
-}
-
-// Informational
-auto DeviceManager::has_device_at(port_id_t port) const noexcept -> bool {
-  return port < slots_.size() && slots_[port].device != nullptr;
-}
-
-auto DeviceManager::get_device_name(port_id_t port) const noexcept
-    -> std::optional<std::string_view> {
-  if (!has_device_at(port)) {
-    return std::nullopt;
-  }
-  return std::string_view(slots_[port].desc.name);
 }
 
 void DeviceManager::dump_device_map() const {
-  HAL_INFO("--- Device Map Summary ---");
-  HAL_INFO("Active Devices: {} / {} ports", active_device_count(),
-           port_count());
-
-  for (const auto &[base, port] : addr_indices_) {
-    const auto &slot = slots_[port];
-    const addr_t range = slot.device->address_range();
-    const addr_t end = base + range - 1;
-
-    HAL_INFO("Port {:>2}: {:<10} [0x{:08X} - 0x{:08X}] ({:>8} bytes)", port,
-             slot.desc.name, static_cast<uint32_t>(base),
-             static_cast<uint32_t>(end), static_cast<uint32_t>(range));
+  HAL_INFO("--- Device Map Summary ---")
+  for (const auto &slot : devices_) {
+    const auto first = slot.device->base_address();
+    const auto last = first + slot.device->address_range() - 1;
+    HAL_INFO("{:<12} [0x{:08X} - 0x{:08X}]", slot.desc.name, first, last)
   }
-}
-
-void DeviceManager::ensure_capacity(port_id_t port) {
-  if (port >= slots_.size()) {
-    slots_.resize(static_cast<size_t>(port) + 1);
-  }
-}
-
-void DeviceManager::rebuild_indices_for(port_id_t port) {
-  auto &slot = slots_[port];
-  if (!slot.device) {
-    return;
-  }
-
-  name_indices_[slot.desc.name.data()] = port;
-  addr_indices_[slot.device->base_address()] = port;
-}
-
-void DeviceManager::remove_indices_for(port_id_t port) {
-  auto &slot = slots_[port];
-  if (!slot.device) {
-    return;
-  }
-
-  name_indices_.erase(slot.desc.name.data());
-  addr_indices_.erase(slot.device->base_address());
 }
 
 } // namespace demu::hal

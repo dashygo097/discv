@@ -25,7 +25,8 @@ $(SIM_BUILD_DIR)/verilator/model/.done: $(SIM_EXECUTABLE)
 	@printf '%s\n' "$(PROJECT_CONFIG_DIGEST)" >"$@"
 
 $(SIM_EXECUTABLE): $(SIM_CONFIG_CMAKE) \
-		$(SIM_CONFIG_HEADER) $(SIM_DEVICES_HEADER) $(PROJECT_ENV) $(CONFIG_MANIFEST) \
+		$(SIM_CONFIG_HEADER) $(SIM_PLATFORM_HEADER) $(SIM_PLATFORM_PACKAGE) \
+		$(PROJECT_ENV) $(CONFIG_MANIFEST) \
 		$(wildcard $(RTL_SOURCES)) $(wildcard $(RTL_HEADERS)) $(SIM_CPP_INPUTS) \
 		$(SCRIPT_DIR)/sim/build.sh $(SCRIPT_DIR)/common/check_env.sh
 	@echo "[SIM::verilator] Building RISC-V simulator"

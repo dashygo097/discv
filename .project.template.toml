@@ -1,4 +1,4 @@
-schema_version = 3
+schema_version = 4
 
 [parameters]
 XLEN = 32
@@ -69,6 +69,14 @@ required_variables = []
 # [simulation]
 # reset_cycles = 5
 # max_cycles = 1000000
+
+# [[simulation.ports]]
+# name = "imem"
+# protocol = "virt"
+
+# [[simulation.ports]]
+# name = "dmem"
+# protocol = "virt"
 
 # [[simulation.devices]]
 # name = "imem"

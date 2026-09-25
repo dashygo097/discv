@@ -2,31 +2,10 @@
 
 #include "demu/hal/allocator.hh"
 #include "demu/hal/hardware.hh"
-#include <cstdint>
-#include <optional>
-#include <string_view>
+#include "demu/hal/platform.hh"
 #include <utility>
 
 namespace demu::hal {
-
-enum class DeviceType {
-  TCM,
-  HostExit,
-};
-
-struct DeviceDescriptor {
-  std::string_view name;
-  DeviceType type;
-  std::uint64_t base;
-  std::uint64_t size;
-  bool load;
-  std::uint64_t load_address;
-};
-
-struct DeviceAccessResult {
-  word_t data{0};
-  bool error{false};
-};
 
 class Device : public Hardware {
 public:
@@ -63,31 +42,6 @@ public:
 
   [[nodiscard]] virtual auto allocator() const noexcept -> MemoryAllocator * {
     return nullptr;
-  }
-  [[nodiscard]] virtual auto access(addr_t address, bool write, word_t data,
-                                    byte_t strb) noexcept
-      -> DeviceAccessResult {
-    auto *memory = allocator();
-    const addr_t aligned_address = address & ~addr_t{0x3U};
-    if (memory == nullptr ||
-        !memory->is_valid_range(aligned_address, sizeof(word_t))) {
-      return DeviceAccessResult{0, true};
-    }
-
-    if (write) {
-      for (std::uint32_t byte = 0; byte < sizeof(word_t); ++byte) {
-        if ((strb & (byte_t{1} << byte)) != 0) {
-          memory->write_byte(aligned_address + byte,
-                             static_cast<byte_t>(data >> (byte * 8U)));
-        }
-      }
-      return DeviceAccessResult{0, false};
-    }
-    return DeviceAccessResult{memory->read_word(aligned_address), false};
-  }
-  [[nodiscard]] virtual auto take_exit_code() noexcept
-      -> std::optional<word_t> {
-    return std::nullopt;
   }
   virtual void dump(addr_t start, size_t size) const noexcept {}
 

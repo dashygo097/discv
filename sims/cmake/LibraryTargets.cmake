@@ -5,7 +5,7 @@ add_library(demu
 )
 
 verilate(demu
-  SOURCES ${SIM_RTL_SOURCES}
+  SOURCES ${SIM_RTL_SOURCES} ${DEMU_RTL_SOURCES}
   VERILATOR_ARGS
     ${DEMU_VERILATOR_ARGS}
     -j 0

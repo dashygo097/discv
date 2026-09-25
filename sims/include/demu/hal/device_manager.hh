@@ -1,9 +1,10 @@
 #pragma once
 
 #include "demu/hal/device.hh"
-#include "demu/hal/port_handler.hh"
-#include "demu/logger.hh"
-#include <cstdint>
+#include "demu/hal/platform.hh"
+#include "demu/hal/transaction.hh"
+#include <deque>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -14,80 +15,38 @@
 
 namespace demu::hal {
 
-using port_id_t = uint8_t;
-
 class DeviceManager final {
 public:
   DeviceManager() = default;
   ~DeviceManager() = default;
 
-  // Non-copyable, movable
   DeviceManager(const DeviceManager &) = delete;
   auto operator=(const DeviceManager &) -> DeviceManager & = delete;
   DeviceManager(DeviceManager &&) = delete;
   auto operator=(DeviceManager &&) -> DeviceManager & = delete;
 
+  auto configure() -> bool;
   auto load_binary(const std::string &filename) -> bool;
 
-  // Device Registration
-  template <typename T, typename... Args>
-  auto register_device(port_id_t port, DeviceDescriptor desc, Args &&...args)
-      -> T *;
-
-  // Device Retrieval — by port
-  [[nodiscard]] auto get_device(port_id_t port) noexcept -> Device *;
-  [[nodiscard]] auto get_device(port_id_t port) const noexcept
-      -> const Device *;
-
-  template <typename T>
-  [[nodiscard]] auto get_device(port_id_t port) noexcept -> T *;
-
-  template <typename T>
-  [[nodiscard]] auto get_device(port_id_t port) const noexcept -> const T *;
-
-  // Device Retrieval — by name
   [[nodiscard]] auto get_device_by_name(std::string_view name) noexcept
       -> Device *;
   [[nodiscard]] auto get_device_by_name(std::string_view name) const noexcept
       -> const Device *;
-
-  template <typename T>
-  [[nodiscard]] auto get_device_by_name(std::string_view name) noexcept -> T *;
-
-  template <typename T>
-  [[nodiscard]] auto get_device_by_name(std::string_view name) const noexcept
-      -> const T *;
-
-  // Device Retrieval — by address
-  [[nodiscard]] auto find_device_for_address(addr_t addr) noexcept -> Device *;
-  [[nodiscard]] auto find_device_for_address(addr_t addr) const noexcept
+  [[nodiscard]] auto find_device_for_address(addr_t address) noexcept
+      -> Device *;
+  [[nodiscard]] auto find_device_for_address(addr_t address) const noexcept
       -> const Device *;
 
-  // CPU memory ports and device access
-  void register_handler(std::unique_ptr<PortHandler> handler);
-  void handle_ports() noexcept;
-  [[nodiscard]] auto read_instruction(addr_t address) noexcept
-      -> DeviceAccessResult;
-  [[nodiscard]] auto access_data(addr_t address, bool write, word_t data,
-                                 byte_t strb) noexcept -> DeviceAccessResult;
-  void complete_data_response() noexcept;
-  [[nodiscard]] auto take_exit_code() noexcept -> std::optional<word_t>;
+  [[nodiscard]] auto submit(port_id_t port,
+                            const Transaction &transaction) noexcept
+      -> std::optional<transaction_id_t>;
+  [[nodiscard]] auto poll(transaction_id_t transaction) noexcept
+      -> std::optional<Response>;
+  auto complete(transaction_id_t transaction) noexcept -> bool;
+  [[nodiscard]] auto take_event() noexcept -> std::optional<DeviceEvent>;
 
-  // Bulk Operations
   void reset() noexcept;
   void clock_tick() noexcept;
-
-  // Informational
-  [[nodiscard]] auto port_count() const noexcept -> size_t {
-    return slots_.size();
-  }
-  [[nodiscard]] auto active_device_count() const noexcept -> size_t {
-    return name_indices_.size();
-  }
-  [[nodiscard]] auto has_device_at(port_id_t port) const noexcept -> bool;
-  [[nodiscard]] auto get_device_name(port_id_t port) const noexcept
-      -> std::optional<std::string_view>;
-
   void dump_device_map() const;
 
 private:
@@ -96,73 +55,19 @@ private:
     std::unique_ptr<Device> device;
   };
 
-  // components
-  std::vector<DeviceSlot> slots_;
-  std::vector<std::unique_ptr<PortHandler>> handlers_;
-  std::unordered_map<std::string, port_id_t> name_indices_;
-  std::map<addr_t, port_id_t> addr_indices_;
-  std::optional<word_t> pending_exit_code_;
-  std::optional<word_t> completed_exit_code_;
-  // helpers
-  void ensure_capacity(port_id_t port);
-  void rebuild_indices_for(port_id_t port);
-  void remove_indices_for(port_id_t port);
+  struct PendingTransaction {
+    MmioTarget *target;
+    Transaction request;
+    std::optional<Response> response;
+  };
+
+  std::vector<PortDescriptor> ports_;
+  std::vector<DeviceSlot> devices_;
+  std::map<addr_t, Device *> device_map_;
+  std::unordered_map<std::string, device_id_t> name_indices_;
+  std::unordered_map<transaction_id_t, PendingTransaction> pending_;
+  std::deque<DeviceEvent> events_;
+  transaction_id_t next_transaction_{1};
 };
-
-template <typename T, typename... Args>
-auto DeviceManager::register_device(port_id_t port, DeviceDescriptor desc,
-                                    Args &&...args) -> T * {
-  static_assert(std::is_base_of_v<Device, T>, "T must derive from Device");
-
-  ensure_capacity(port);
-
-  if (slots_[port].device) {
-    remove_indices_for(port);
-  }
-
-  try {
-    auto device = std::make_unique<T>(desc, std::forward<Args>(args)...);
-    T *ptr = device.get();
-
-    slots_[port].desc = desc;
-    slots_[port].device = std::move(device);
-
-    rebuild_indices_for(port);
-
-    HAL_DEBUG("Registered device '{}' on Port {} [Base: 0x{:08X}]", desc.name,
-              port, static_cast<addr_t>(ptr->base_address()));
-
-    return ptr;
-  } catch (const std::exception &e) {
-    HAL_ERROR("Failed to create device '{}' on Port {}: {}", desc.name, port,
-              e.what());
-    return nullptr;
-  }
-}
-
-template <typename T>
-auto DeviceManager::get_device(port_id_t port) noexcept -> T * {
-  static_assert(std::is_base_of_v<Device, T>, "T must derive from Device");
-  return dynamic_cast<T *>(get_device(port));
-}
-
-template <typename T>
-auto DeviceManager::get_device(port_id_t port) const noexcept -> const T * {
-  static_assert(std::is_base_of_v<Device, T>, "T must derive from Device");
-  return dynamic_cast<const T *>(get_device(port));
-}
-
-template <typename T>
-auto DeviceManager::get_device_by_name(std::string_view name) noexcept -> T * {
-  static_assert(std::is_base_of_v<Device, T>, "T must derive from Device");
-  return dynamic_cast<T *>(get_device_by_name(name));
-}
-
-template <typename T>
-auto DeviceManager::get_device_by_name(std::string_view name) const noexcept
-    -> const T * {
-  static_assert(std::is_base_of_v<Device, T>, "T must derive from Device");
-  return dynamic_cast<const T *>(get_device_by_name(name));
-}
 
 } // namespace demu::hal

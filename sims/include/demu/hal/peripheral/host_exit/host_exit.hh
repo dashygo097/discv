@@ -1,36 +1,29 @@
 #pragma once
 
 #include "demu/hal/device.hh"
-#include <optional>
+#include "demu/hal/transaction.hh"
 
 namespace demu::hal::host_exit {
 
-class HostExit final : public Device {
+class HostExit final : public Device, public MmioTarget {
 public:
   explicit HostExit(const DeviceDescriptor &desc) : Device(desc) {}
 
   void clock_tick() override {}
-  void reset() override { exit_code_.reset(); }
+  void reset() override {}
 
-  [[nodiscard]] auto access(addr_t address, bool write, word_t data,
-                            byte_t strb) noexcept
-      -> DeviceAccessResult override {
-    if (!write || address != base_address() || strb != byte_t{0x0F}) {
-      return DeviceAccessResult{0, true};
+  [[nodiscard]] auto submit(transaction_id_t,
+                            const Transaction &transaction) noexcept
+      -> std::optional<Response> override {
+    if (transaction.access != AccessType::Write ||
+        transaction.address != base_address() ||
+        transaction.size != sizeof(word_t) ||
+        transaction.strobe != byte_t{0x0F}) {
+      return Response{ResponseStatus::SlaveError};
     }
-    exit_code_ = data;
-    return DeviceAccessResult{0, false};
+    return Response{ResponseStatus::Okay, 0,
+                    DeviceEvent{DeviceEventType::Exit, transaction.data}};
   }
-
-  [[nodiscard]] auto take_exit_code() noexcept
-      -> std::optional<word_t> override {
-    auto exit_code = exit_code_;
-    exit_code_.reset();
-    return exit_code;
-  }
-
-private:
-  std::optional<word_t> exit_code_;
 };
 
 } // namespace demu::hal::host_exit

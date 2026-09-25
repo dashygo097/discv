@@ -16,7 +16,8 @@ CONSTRAINTS_SDC := $(GENERATED_DIR)/constraints.sdc
 SYNTH_DC_CONFIG := $(GENERATED_DIR)/synth.dc.tcl
 SIM_CONFIG_CMAKE := $(GENERATED_DIR)/sim.cmake
 SIM_CONFIG_HEADER := $(GENERATED_DIR)/demu/generated/cfg.hh
-SIM_DEVICES_HEADER := $(GENERATED_DIR)/demu/generated/devices.hh
+SIM_PLATFORM_HEADER := $(GENERATED_DIR)/demu/generated/platform.hh
+SIM_PLATFORM_PACKAGE := $(GENERATED_DIR)/demu/generated/demu_platform_pkg.sv
 
 # Common utilities
 MKDIR := mkdir -p
