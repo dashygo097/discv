@@ -24,8 +24,12 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.9.0"
+GENERATOR_VERSION = "0.11.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+RISCV_MARCH = re.compile(
+    r"^rv(?P<xlen>32|64)(?P<base>[ieg])(?P<extensions>[a-z0-9]*)"
+    r"(?:_[a-z][a-z0-9]*)*$"
+)
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
 GENERATED_HEADER_NAMES = {"cfg.svh"}
@@ -577,7 +581,7 @@ def normalize_verilator_simulation(verilator):
     }
 
 
-def normalize_simulation(raw, parameters, *, required):
+def normalize_simulation(raw, architecture, *, required):
     simulation = raw.get("simulation", {})
     if not isinstance(simulation, dict):
         raise ConfigError("simulation: expected a table")
@@ -691,12 +695,12 @@ def normalize_simulation(raw, parameters, *, required):
             raise ConfigError(
                 "simulation.devices: expected at least one device when simulation is enabled"
             )
-    reset_vector = parameters.get("RESET_VECTOR")
+    reset_vector = architecture["reset_vector"]
     if required and (
         isinstance(reset_vector, bool) or not isinstance(reset_vector, int)
     ):
         raise ConfigError(
-            "simulation: parameters.RESET_VECTOR must be an integer"
+            "simulation: architecture.reset_vector must be an integer"
         )
     if required:
         port_names = {port["name"] for port in normalized_ports}
@@ -719,11 +723,11 @@ def normalize_simulation(raw, parameters, *, required):
         if load_tcm_count != 1 or imem.get("load_address") != reset_vector:
             raise ConfigError(
                 "simulation.devices: imem must be the only device defining "
-                "load_address, and it must equal parameters.RESET_VECTOR"
+                "load_address, and it must equal architecture.reset_vector"
             )
         if not imem["base"] <= reset_vector < imem["base"] + imem["size"]:
             raise ConfigError(
-                "simulation.devices: parameters.RESET_VECTOR is outside imem"
+                "simulation.devices: architecture.reset_vector is outside imem"
             )
 
         host_exit_devices = [
@@ -761,7 +765,7 @@ def load_config(config_path, project_root):
         raw,
         {
             "schema_version",
-            "parameters",
+            "architecture",
             "rtl",
             "build",
             "environment",
@@ -772,39 +776,41 @@ def load_config(config_path, project_root):
         },
         "<root>",
     )
-    if raw.get("schema_version") != 4:
-        raise ConfigError("schema_version: expected integer 4")
+    if raw.get("schema_version") != 5:
+        raise ConfigError("schema_version: expected integer 5")
 
-    parameters = require_table(raw, "parameters")
-    normalized_parameters = {}
-    for key in sorted(parameters):
-        if not IDENTIFIER.match(key):
-            raise ConfigError(f"parameters.{key}: invalid SystemVerilog identifier")
-        value = parameters[key]
-        if not isinstance(value, (str, int, bool)):
-            raise ConfigError(f"parameters.{key}: expected string, integer, or boolean")
-        normalized_parameters[key] = value
+    architecture = require_table(raw, "architecture")
+    reject_unknown(
+        architecture,
+        {"march", "top", "reset_vector"},
+        "architecture",
+    )
+    march = require_string(architecture, "march", "architecture")
+    march_match = RISCV_MARCH.fullmatch(march)
+    if march_match is None:
+        raise ConfigError(
+            "architecture.march: expected a lowercase GCC-style RISC-V ISA "
+            'string such as "rv32i" or "rv64gc"'
+        )
+    top = require_string(architecture, "top", "architecture")
+    if not IDENTIFIER.fullmatch(top):
+        raise ConfigError("architecture.top: invalid SystemVerilog identifier")
+    xlen = int(march_match.group("xlen"))
+    reset_vector = unsigned_integer(
+        architecture.get("reset_vector"),
+        "architecture.reset_vector",
+        maximum=(1 << xlen) - 1,
+    )
+    normalized_architecture = {
+        "march": march,
+        "top": top,
+        "reset_vector": reset_vector,
+        "xlen": xlen,
+    }
 
     rtl = require_table(raw, "rtl")
-    reject_unknown(rtl, {"top", "filesets", "defines"}, "rtl")
-    top = require_string(rtl, "top", "rtl")
-    if not IDENTIFIER.match(top):
-        raise ConfigError("rtl.top: invalid SystemVerilog identifier")
+    reject_unknown(rtl, {"filesets"}, "rtl")
     discovered_rtl = discover_rtl_filesets(rtl, project_root)
-    defines = rtl.get("defines", {})
-    if not isinstance(defines, dict):
-        raise ConfigError("rtl.defines: expected a table")
-
-    normalized_defines = {}
-    for key in sorted(defines):
-        if not IDENTIFIER.match(key):
-            raise ConfigError(f"rtl.defines.{key}: invalid identifier")
-        value = defines[key]
-        if not isinstance(value, (str, int, bool)):
-            raise ConfigError(
-                f"rtl.defines.{key}: expected string, integer, or boolean"
-            )
-        normalized_defines[key] = value
 
     build = require_table(raw, "build")
     reject_unknown(build, {"jobs"}, "build")
@@ -873,7 +879,7 @@ def load_config(config_path, project_root):
         )
 
     simulation = normalize_simulation(
-        raw, normalized_parameters, required=bool(normalized_sim)
+        raw, normalized_architecture, required=bool(normalized_sim)
     )
 
     constraints = normalize_constraints(raw)
@@ -902,13 +908,9 @@ def load_config(config_path, project_root):
         raise ConfigError("workflow.stages: duplicate stages are not allowed")
 
     return {
-        "schema_version": 4,
-        "parameters": normalized_parameters,
-        "rtl": {
-            "top": top,
-            **discovered_rtl,
-            "defines": normalized_defines,
-        },
+        "schema_version": 5,
+        "architecture": normalized_architecture,
+        "rtl": discovered_rtl,
         "build": {"jobs": jobs},
         "environment": {
             "required_commands": required_commands,
@@ -931,7 +933,7 @@ def resolved_configuration(config):
     }
     return {
         "schema_version": config["schema_version"],
-        "parameters": config["parameters"],
+        "architecture": config["architecture"],
         "rtl": rtl,
         "build": config["build"],
         "environment": config["environment"],
@@ -966,26 +968,10 @@ def render_filelist(config, digest, project_root, output_dir):
         f"+incdir+{absolute_project_path(project_root, path)}"
         for path in config["rtl"]["include_dirs"]
     )
-    for name, value in sorted(config["rtl"]["defines"].items()):
-        if isinstance(value, bool):
-            if value:
-                lines.append(f"+define+{name}")
-        else:
-            lines.append(f"+define+{name}={value}")
     lines.extend(
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     )
     return "\n".join(lines) + "\n"
-
-
-def systemverilog_string(value):
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-    )
-    return f'"{escaped}"'
 
 
 def systemverilog_integer(value):
@@ -1001,16 +987,15 @@ def systemverilog_integer(value):
 
 
 def render_svh(config, digest):
-    lines = [header("//", digest).rstrip()]
-    for name, value in sorted(config["parameters"].items()):
-        if isinstance(value, bool):
-            literal = "1'b1" if value else "1'b0"
-            lines.append(f"localparam bit {name} = {literal};")
-        elif isinstance(value, int):
-            parameter_type, literal = systemverilog_integer(value)
-            lines.append(f"localparam {parameter_type} {name} = {literal};")
-        else:
-            lines.append(f"localparam string {name} = {systemverilog_string(value)};")
+    architecture = config["architecture"]
+    reset_type, reset_literal = systemverilog_integer(
+        architecture["reset_vector"]
+    )
+    lines = [
+        header("//", digest).rstrip(),
+        f"localparam int unsigned XLEN = 32'd{architecture['xlen']};",
+        f"localparam {reset_type} RESET_VECTOR = {reset_literal};",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -1030,13 +1015,6 @@ def format_number(value):
 
 
 def render_rtl_tcl(config, digest, project_root, output_dir):
-    defines = []
-    for name, value in sorted(config["rtl"]["defines"].items()):
-        if isinstance(value, bool):
-            if value:
-                defines.append(name)
-        else:
-            defines.append(f"{name}={value}")
     sources = [
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     ]
@@ -1047,10 +1025,9 @@ def render_rtl_tcl(config, digest, project_root, output_dir):
     return "".join(
         [
             header("#", digest),
-            f"set RTL_TOP {tcl_braced(config['rtl']['top'])}\n",
+            f"set RTL_TOP {tcl_braced(config['architecture']['top'])}\n",
             f"set RTL_SOURCES {tcl_list(sources)}\n",
             f"set RTL_INCLUDE_DIRS {tcl_list(include_dirs)}\n",
-            f"set RTL_DEFINES {tcl_list(defines)}\n",
         ]
     )
 
@@ -1190,19 +1167,13 @@ def cpp_string(value):
 
 
 def render_demu_config(config, digest):
-    values = []
-    for name, value in config["parameters"].items():
-        if isinstance(value, bool):
-            declaration = f"inline constexpr bool {name} = {'true' if value else 'false'};"
-        elif isinstance(value, int):
-            declaration = (
-                f"inline constexpr std::uint64_t {name} = UINT64_C({value});"
-            )
-        else:
-            declaration = (
-                f"inline constexpr std::string_view {name} = {cpp_string(value)};"
-            )
-        values.append(declaration)
+    architecture = config["architecture"]
+    values = [
+        f"inline constexpr std::string_view MARCH = {cpp_string(architecture['march'])};",
+        f"inline constexpr std::uint64_t XLEN = UINT64_C({architecture['xlen']});",
+        "inline constexpr std::uint64_t RESET_VECTOR = "
+        f"UINT64_C({architecture['reset_vector']});",
+    ]
 
     return "".join(
         [
@@ -1425,6 +1396,7 @@ def render_sim_cmake(config, digest, project_root, output_dir):
             header("#", digest),
             f"set(SIM_PROJECT_ROOT {cmake_quote(project_root)})\n",
             f"set(SIM_TOP {cmake_quote(sim_top)})\n",
+            f"set(SIM_RTL_TOP {cmake_quote(config['architecture']['top'])})\n",
             f"set(SIM_RESET_CYCLES {simulation['reset_cycles']})\n",
             f"set(SIM_MAX_CYCLES {simulation['max_cycles']})\n",
             f"set(SIM_THREADS {verilator['threads']})\n",
@@ -1459,7 +1431,7 @@ def make_project_path(path):
 
 
 def render_makefile(config, digest, project_root):
-    project_top = make_escape(config["rtl"]["top"])
+    project_top = make_escape(config["architecture"]["top"])
     lint_tools = " ".join(make_escape(tool) for tool in config["flow"]["lint"])
     synth_tools = " ".join(make_escape(tool) for tool in config["flow"]["synth"])
     sim_tools = " ".join(make_escape(tool) for tool in config["flow"]["sim"])
@@ -1493,7 +1465,7 @@ def shell_array(name, values):
 
 
 def render_environment(config, digest):
-    rtl_top = shlex.quote(config["rtl"]["top"])
+    rtl_top = shlex.quote(config["architecture"]["top"])
     lint = config["flow"]["lint"]
     synth = config["flow"]["synth"]
     sim = config["flow"]["sim"]

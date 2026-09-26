@@ -21,7 +21,8 @@ lint-run: $(LINT_TOOL_STAMPS)
 		exit 2; \
 	fi
 
-$(LINT_BUILD_DIR)/%/.done: $(LINT_FILELIST) $(PROJECT_ENV) $(CONFIG_MANIFEST) \
+$(LINT_BUILD_DIR)/%/.done: $(LINT_FILELIST) $(CONFIG_SVH) \
+		$(PROJECT_ENV) $(CONFIG_MANIFEST) \
 		$(wildcard $(RTL_SOURCES)) \
 		$(wildcard $(RTL_HEADERS)) \
 		$(wildcard $(SCRIPT_DIR)/lint/*) $(SCRIPT_DIR)/common/check_env.sh \

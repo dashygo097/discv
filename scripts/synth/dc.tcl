@@ -83,9 +83,6 @@ proc project_main {} {
   set_svf [file join $result_dir ${RTL_TOP}.svf]
 
   set analyze_command [list analyze -format sverilog -library WORK]
-  if {[llength $RTL_DEFINES] > 0} {
-    lappend analyze_command -define $RTL_DEFINES
-  }
   lappend analyze_command $RTL_SOURCES
   eval $analyze_command
 

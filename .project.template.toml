@@ -1,13 +1,11 @@
-schema_version = 4
+schema_version = 5
 
-[parameters]
-XLEN = 32
-RESET_VECTOR = 0x00000000
+[architecture]
+march = "rv32i"
+top = ""
+reset_vector = 0x00000000
 
 [rtl]
-top = ""
-
-[rtl.defines]
 
 [[rtl.filesets]]
 name = "packages"

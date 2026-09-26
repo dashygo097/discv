@@ -81,7 +81,7 @@ def main():
         "duration_seconds": max(0, args.finished - args.started),
         "exit_code": args.exit_code,
         "finished_epoch": args.finished,
-        "rtl_top": project_manifest["rtl"]["top"],
+        "rtl_top": project_manifest["architecture"]["top"],
         "schema_version": 1,
         "stage": args.stage,
         "started_epoch": args.started,

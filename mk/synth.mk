@@ -15,7 +15,7 @@ synth-run: $(SYNTH_TOOL_STAMPS)
 		exit 2; \
 	fi
 
-$(SYNTH_BUILD_DIR)/%/.done: $(RTL_TCL) $(CONSTRAINTS_SDC) \
+$(SYNTH_BUILD_DIR)/%/.done: $(RTL_TCL) $(CONFIG_SVH) $(CONSTRAINTS_SDC) \
 		$(SYNTH_DC_CONFIG) $(PROJECT_ENV) $(CONFIG_MANIFEST) \
 		$(wildcard $(RTL_SOURCES)) \
 		$(wildcard $(RTL_HEADERS)) \

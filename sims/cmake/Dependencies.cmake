@@ -9,6 +9,9 @@ endif()
 if(NOT SIM_RTL_SOURCES)
   message(FATAL_ERROR "SIM_RTL_SOURCES is empty in generated sim.cmake")
 endif()
+if(NOT SIM_RTL_TOP)
+  message(FATAL_ERROR "SIM_RTL_TOP is empty in generated sim.cmake")
+endif()
 
 set(DEMU_VERILATOR_ARGS
   -Wall
@@ -18,6 +21,7 @@ set(DEMU_VERILATOR_ARGS
   -Wno-DECLFILENAME
   -Wno-PINCONNECTEMPTY
   -Wno-COVERIGN
+  "-DDEMU_RTL_TOP=${SIM_RTL_TOP}"
   ${SIM_VERILATOR_OPTIONS}
 )
 
