@@ -24,17 +24,43 @@ except ImportError:
         raise SystemExit(2)
 
 
-GENERATOR_VERSION = "0.11.0"
+GENERATOR_VERSION = "0.12.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RISCV_MARCH = re.compile(
-    r"^rv(?P<xlen>32|64)(?P<base>[ieg])(?P<extensions>[a-z0-9]*)"
-    r"(?:_[a-z][a-z0-9]*)*$"
+    r"^rv(?P<xlen>32|64)(?P<compact>[a-z0-9]+)"
+    r"(?P<suffix>(?:_[a-z][a-z0-9]*)*)$"
 )
+RISCV_SINGLE_EXTENSION = re.compile(
+    r"(?P<name>[a-z])(?P<version>\d+(?:p\d+)?)?"
+)
+RISCV_MULTI_EXTENSION = re.compile(
+    r"^(?P<name>[a-z][a-z0-9]*?)(?:\d+(?:p\d+)?)?$"
+)
+ARCH_FEATURES = (
+    "i",
+    "e",
+    "m",
+    "a",
+    "f",
+    "d",
+    "c",
+    "b",
+    "v",
+    "zicsr",
+    "zifencei",
+)
+MICROARCHITECTURE_CAPABILITIES = {
+    "cpu_5stage_top": {
+        "xlen": 32,
+        "extensions": frozenset({"i"}),
+    },
+}
 RTL_SOURCE_SUFFIXES = {".sv", ".v"}
 RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
-GENERATED_HEADER_NAMES = {"cfg.svh"}
+GENERATED_RTL_NAMES = {"arch_pkg.sv"}
 MANAGED_OUTPUT_NAMES = {
     ".done",
+    "arch_pkg.sv",
     "cfg.svh",
     "constraints.sdc",
     "demu/generated/cfg.hh",
@@ -57,6 +83,101 @@ MANAGED_OUTPUT_NAMES = {
 
 class ConfigError(Exception):
     pass
+
+
+def parse_riscv_march(march):
+    match = RISCV_MARCH.fullmatch(march)
+    if match is None:
+        raise ConfigError(
+            "architecture.march: expected a lowercase GCC-style RISC-V ISA "
+            'string such as "rv32i" or "rv64gc"'
+        )
+
+    compact = match.group("compact")
+    single_extensions = []
+    offset = 0
+    while offset < len(compact):
+        extension_match = RISCV_SINGLE_EXTENSION.match(compact, offset)
+        if extension_match is None:
+            raise ConfigError(
+                f"architecture.march: malformed extension near {compact[offset:]!r}"
+            )
+        single_extensions.append(extension_match.group("name"))
+        offset = extension_match.end()
+
+    duplicate_single_extensions = sorted(
+        extension
+        for extension in set(single_extensions)
+        if single_extensions.count(extension) > 1
+    )
+    if duplicate_single_extensions:
+        raise ConfigError(
+            "architecture.march: duplicate single-letter extension(s): "
+            + ", ".join(duplicate_single_extensions)
+        )
+
+    base = single_extensions[0]
+    if base not in {"i", "e", "g"}:
+        raise ConfigError(
+            'architecture.march: base ISA must be "i", "e", or "g"'
+        )
+    if "g" in single_extensions[1:]:
+        raise ConfigError('architecture.march: "g" is only valid as the base ISA')
+
+    extensions = set(single_extensions)
+    if base == "g":
+        extensions.remove("g")
+        extensions.update({"i", "m", "a", "f", "d", "zicsr", "zifencei"})
+
+    suffix = match.group("suffix")
+    for token in suffix.split("_"):
+        if not token:
+            continue
+        extension_match = RISCV_MULTI_EXTENSION.fullmatch(token)
+        if extension_match is None:
+            raise ConfigError(
+                f"architecture.march: malformed multi-letter extension: {token}"
+            )
+        extension = extension_match.group("name")
+        if extension in extensions:
+            raise ConfigError(
+                f"architecture.march: duplicate extension: {extension}"
+            )
+        extensions.add(extension)
+
+    xlen = int(match.group("xlen"))
+    if xlen != 32 and "e" in extensions:
+        raise ConfigError("architecture.march: the E base ISA requires RV32")
+    if "i" in extensions and "e" in extensions:
+        raise ConfigError('architecture.march: base ISAs "i" and "e" conflict')
+    return xlen, frozenset(extensions)
+
+
+def validate_microarchitecture(top, xlen, extensions):
+    capability = MICROARCHITECTURE_CAPABILITIES.get(top)
+    if capability is None:
+        known = ", ".join(sorted(MICROARCHITECTURE_CAPABILITIES))
+        raise ConfigError(
+            f"architecture.top: no capability contract is registered for {top}; "
+            f"known microarchitectures: {known}"
+        )
+    if xlen != capability["xlen"]:
+        raise ConfigError(
+            f"architecture.march: {top} supports RV{capability['xlen']}, "
+            f"but RV{xlen} was requested"
+        )
+    unsupported = sorted(extensions - capability["extensions"])
+    missing = sorted(capability["extensions"] - extensions)
+    if unsupported or missing:
+        details = []
+        if unsupported:
+            details.append(f"unsupported extension(s): {', '.join(unsupported)}")
+        if missing:
+            details.append(f"required extension(s) missing: {', '.join(missing)}")
+        raise ConfigError(
+            f"architecture.march: {top} does not support the requested ISA "
+            f"({'; '.join(details)})"
+        )
 
 
 def reject_unknown(table, allowed, location):
@@ -158,10 +279,6 @@ def absolute_project_path(project_root, path):
 
 
 def validate_include_resolution(include_dirs, headers):
-    for header in headers:
-        if Path(header).name.casefold() in GENERATED_HEADER_NAMES:
-            raise ConfigError(f"RTL header conflicts with generated cfg.svh: {header}")
-
     candidates = {}
     for include_dir in include_dirs:
         include_path = Path(include_dir)
@@ -310,6 +427,16 @@ def discover_rtl_filesets(rtl, project_root):
 
     if not sources:
         raise ConfigError("rtl.filesets: no RTL sources matched")
+    generated_conflicts = sorted(
+        source
+        for source in sources
+        if Path(source).name.casefold() in GENERATED_RTL_NAMES
+    )
+    if generated_conflicts:
+        raise ConfigError(
+            "RTL source conflicts with generated architecture package: "
+            + ", ".join(generated_conflicts)
+        )
     validate_include_resolution(include_dirs, headers)
     return {
         "filesets": normalized_filesets,
@@ -786,16 +913,11 @@ def load_config(config_path, project_root):
         "architecture",
     )
     march = require_string(architecture, "march", "architecture")
-    march_match = RISCV_MARCH.fullmatch(march)
-    if march_match is None:
-        raise ConfigError(
-            "architecture.march: expected a lowercase GCC-style RISC-V ISA "
-            'string such as "rv32i" or "rv64gc"'
-        )
+    xlen, extensions = parse_riscv_march(march)
     top = require_string(architecture, "top", "architecture")
     if not IDENTIFIER.fullmatch(top):
         raise ConfigError("architecture.top: invalid SystemVerilog identifier")
-    xlen = int(march_match.group("xlen"))
+    validate_microarchitecture(top, xlen, extensions)
     reset_vector = unsigned_integer(
         architecture.get("reset_vector"),
         "architecture.reset_vector",
@@ -806,6 +928,10 @@ def load_config(config_path, project_root):
         "top": top,
         "reset_vector": reset_vector,
         "xlen": xlen,
+        "extensions": sorted(extensions),
+        "features": {
+            feature: feature in extensions for feature in ARCH_FEATURES
+        },
     }
 
     rtl = require_table(raw, "rtl")
@@ -968,33 +1094,37 @@ def render_filelist(config, digest, project_root, output_dir):
         f"+incdir+{absolute_project_path(project_root, path)}"
         for path in config["rtl"]["include_dirs"]
     )
+    lines.append(str(output_dir / "arch_pkg.sv"))
     lines.extend(
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     )
     return "\n".join(lines) + "\n"
 
 
-def systemverilog_integer(value):
-    if 0 <= value <= 0xFFFFFFFF:
-        return "int unsigned", f"32'd{value}"
-    if 0 <= value <= 0xFFFFFFFFFFFFFFFF:
-        return "longint unsigned", f"64'd{value}"
-    if -0x80000000 <= value < 0:
-        return "int", f"32'sh{value & 0xFFFFFFFF:08x}"
-    if -0x8000000000000000 <= value < 0:
-        return "longint", f"64'sh{value & 0xFFFFFFFFFFFFFFFF:016x}"
-    raise ConfigError(f"integer parameter is outside the 64-bit range: {value}")
-
-
-def render_svh(config, digest):
+def render_arch_package(config, digest):
     architecture = config["architecture"]
-    reset_type, reset_literal = systemverilog_integer(
-        architecture["reset_vector"]
-    )
     lines = [
         header("//", digest).rstrip(),
-        f"localparam int unsigned XLEN = 32'd{architecture['xlen']};",
-        f"localparam {reset_type} RESET_VECTOR = {reset_literal};",
+        "package arch_pkg;",
+        "  typedef struct packed {",
+        "    int unsigned xlen;",
+        "    logic [63:0] reset_vector;",
+        *[f"    logic has_{feature};" for feature in ARCH_FEATURES],
+        "  } arch_t;",
+        "",
+        f"  localparam int unsigned XLEN = 32'd{architecture['xlen']};",
+        "  localparam logic [63:0] RESET_VECTOR = "
+        f"64'h{architecture['reset_vector']:016x};",
+        "  localparam arch_t ARCH = '{",
+        "      xlen: XLEN,",
+        "      reset_vector: RESET_VECTOR,",
+        *[
+            f"      has_{feature}: 1'b{int(architecture['features'][feature])},"
+            for feature in ARCH_FEATURES
+        ],
+        "      default: '0",
+        "  };",
+        "endpackage",
     ]
     return "\n".join(lines) + "\n"
 
@@ -1015,7 +1145,7 @@ def format_number(value):
 
 
 def render_rtl_tcl(config, digest, project_root, output_dir):
-    sources = [
+    sources = [str(output_dir / "arch_pkg.sv")] + [
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     ]
     include_dirs = [str(output_dir)] + [
@@ -1173,6 +1303,11 @@ def render_demu_config(config, digest):
         f"inline constexpr std::uint64_t XLEN = UINT64_C({architecture['xlen']});",
         "inline constexpr std::uint64_t RESET_VECTOR = "
         f"UINT64_C({architecture['reset_vector']});",
+        *[
+            f"inline constexpr bool HAS_{feature.upper()} = "
+            f"{'true' if architecture['features'][feature] else 'false'};"
+            for feature in ARCH_FEATURES
+        ],
     ]
 
     return "".join(
@@ -1377,7 +1512,8 @@ def render_sim_cmake(config, digest, project_root, output_dir):
     simulation = config["simulation"]
     sim_top = "demu_sim_top"
     sources = [
-        str((output_dir / "demu/generated/demu_platform_pkg.sv").resolve())
+        str((output_dir / "arch_pkg.sv").resolve()),
+        str((output_dir / "demu/generated/demu_platform_pkg.sv").resolve()),
     ] + [
         absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
     ]
@@ -1558,7 +1694,7 @@ def render_outputs(config, config_path, project_root, output_dir):
     outputs = {
         "project.mk": render_makefile(config, digest, project_root),
         "project.env": render_environment(config, digest),
-        "cfg.svh": render_svh(config, digest),
+        "arch_pkg.sv": render_arch_package(config, digest),
     }
     if config["flow"]["lint"]:
         outputs["rtl.f"] = render_filelist(

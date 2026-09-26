@@ -21,7 +21,7 @@ lint-run: $(LINT_TOOL_STAMPS)
 		exit 2; \
 	fi
 
-$(LINT_BUILD_DIR)/%/.done: $(LINT_FILELIST) $(CONFIG_SVH) \
+$(LINT_BUILD_DIR)/%/.done: $(LINT_FILELIST) $(ARCH_PACKAGE) \
 		$(PROJECT_ENV) $(CONFIG_MANIFEST) \
 		$(wildcard $(RTL_SOURCES)) \
 		$(wildcard $(RTL_HEADERS)) \

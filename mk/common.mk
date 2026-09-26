@@ -12,6 +12,7 @@ SCRIPT_DIR      := $(PROJECT_ROOT)/scripts
 # Generated from Project.toml
 RTL_FILELIST := $(GENERATED_DIR)/rtl.f
 RTL_TCL := $(GENERATED_DIR)/rtl.tcl
+ARCH_PACKAGE := $(GENERATED_DIR)/arch_pkg.sv
 CONSTRAINTS_SDC := $(GENERATED_DIR)/constraints.sdc
 SYNTH_DC_CONFIG := $(GENERATED_DIR)/synth.dc.tcl
 SIM_CONFIG_CMAKE := $(GENERATED_DIR)/sim.cmake

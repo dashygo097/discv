@@ -239,7 +239,7 @@ module cpu_5stage_top
 
   always_ff @(posedge clk_i or negedge rst_n_i) begin
     if (!rst_n_i) begin
-      fetch_pc_r <= addr_t'(cfg_pkg::RESET_VECTOR);
+      fetch_pc_r <= addr_t'(arch_pkg::ARCH.reset_vector);
       fetch_request_pc_r <= '0;
       fetch_state_r <= FETCH_RESET;
     end else begin
@@ -269,7 +269,7 @@ module cpu_5stage_top
         end
 
         default: begin
-          fetch_pc_r <= addr_t'(cfg_pkg::RESET_VECTOR);
+          fetch_pc_r <= addr_t'(arch_pkg::ARCH.reset_vector);
           fetch_request_pc_r <= '0;
         end
       endcase

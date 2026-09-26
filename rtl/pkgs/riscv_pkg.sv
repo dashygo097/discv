@@ -1,9 +1,9 @@
 package riscv_pkg;
   localparam int unsigned ILEN = 32;
 
-  typedef logic [cfg_pkg::XLEN-1:0] word_t;
-  typedef logic [cfg_pkg::XLEN-1:0] addr_t;
-  typedef logic [cfg_pkg::XLEN/8-1:0] byte_enable_t;
+  typedef logic [arch_pkg::ARCH.xlen-1:0] word_t;
+  typedef logic [arch_pkg::ARCH.xlen-1:0] addr_t;
+  typedef logic [arch_pkg::ARCH.xlen/8-1:0] byte_enable_t;
   typedef logic [ILEN-1:0] instr_t;
   typedef logic [4:0] reg_addr_t;
   typedef logic [2:0] funct3_t;
