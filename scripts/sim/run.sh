@@ -27,6 +27,12 @@ fi
 require_file "${PROGRAM}"
 PROGRAM=$(cd "$(dirname "${PROGRAM}")" && pwd)/$(basename "${PROGRAM}")
 
+SIM_ARGS=${SIM_ARGS:-}
+sim_args=()
+if [[ -n "${SIM_ARGS}" ]]; then
+  read -r -a sim_args <<<"${SIM_ARGS}"
+fi
+
 STAGE_TOOL=verilator
 export STAGE_TOOL
 stage_initialize
@@ -40,6 +46,7 @@ command=(
 if [[ "${SIM_TRACE}" == true ]]; then
   command+=(--trace)
 fi
+command+=("${sim_args[@]}")
 command+=("${PROGRAM}")
 
 cd "${STAGE_WORK_DIR}"

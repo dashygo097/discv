@@ -59,7 +59,7 @@ help:
 	@echo "  synth        Run RTL synthesis"
 	@echo "  sim          Build the configured RTL simulator"
 	@echo "  sim-build    Alias for sim"
-	@echo "  sim-run      Run the simulator with PROGRAM=path/to/program.bin"
+	@echo "  sim-run      Run with PROGRAM=path/to/program.bin [SIM_ARGS='...']"
 	@echo "  workflow     Run the ordered stages from Project.toml"
 	@echo "  clean        Remove generated flow outputs"
 	@echo "  distclean    Remove build directory and Project.toml"

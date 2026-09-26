@@ -37,6 +37,8 @@ $(SIM_EXECUTABLE): $(SIM_CONFIG_CMAKE) $(CONFIG_SVH) \
 	$(SCRIPT_DIR)/sim/build.sh
 	@test -x "$(SIM_EXECUTABLE)"
 
+sim-run: export PROGRAM := $(PROGRAM)
+sim-run: export SIM_ARGS := $(SIM_ARGS)
 sim-run: sim-build-run
 	@if test "$(SIM_TOOLS)" != "verilator"; then \
 		echo "ERROR: sim currently requires exactly [flow.sim.verilator]" >&2; \
@@ -47,7 +49,6 @@ sim-run: sim-build-run
 	PROJECT_ENV=$(PROJECT_ENV) \
 	CONFIG_MANIFEST=$(CONFIG_MANIFEST) \
 	SIM_EXECUTABLE=$(SIM_EXECUTABLE) \
-	PROGRAM="$(PROGRAM)" \
 	STAGE_NAME=sim \
 	STAGE_BUILD_DIR=$(SIM_BUILD_DIR)/verilator/run \
 	PYTHON=$(VENV_PYTHON) \
