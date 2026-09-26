@@ -5,7 +5,7 @@
 #include "demu/hal/transaction.hh"
 #include <memory>
 
-namespace demu::hal::tcm {
+namespace demu::hal::periph::tcm {
 
 class TCM final : public Device, public MmioTarget {
 public:
@@ -31,4 +31,4 @@ private:
   std::unique_ptr<MemoryAllocator> memory_;
 };
 
-} // namespace demu::hal::tcm
+} // namespace demu::hal::periph::tcm

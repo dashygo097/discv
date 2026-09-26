@@ -1,10 +1,10 @@
-#include "demu/hal/peripheral/tcm/tcm.hh"
+#include "demu/hal/periph/tcm/tcm.hh"
 #include <algorithm>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
 
-namespace demu::hal::tcm {
+namespace demu::hal::periph::tcm {
 
 auto TCM::submit(transaction_id_t, const Transaction &transaction) noexcept
     -> std::optional<Response> {
@@ -78,4 +78,4 @@ void TCM::dump(addr_t start, size_t size) const noexcept {
   }
 }
 
-} // namespace demu::hal::tcm
+} // namespace demu::hal::periph::tcm

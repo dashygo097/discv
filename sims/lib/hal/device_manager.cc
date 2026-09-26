@@ -1,7 +1,7 @@
 #include "demu/hal/device_manager.hh"
 #include "demu/generated/platform.hh"
-#include "demu/hal/peripheral/host_exit/host_exit.hh"
-#include "demu/hal/peripheral/tcm/tcm.hh"
+#include "demu/hal/periph/host_exit/host_exit.hh"
+#include "demu/hal/periph/tcm/tcm.hh"
 #include "demu/logger.hh"
 #include <utility>
 
@@ -39,10 +39,10 @@ auto DeviceManager::configure() -> bool {
     std::unique_ptr<Device> device;
     switch (desc.type) {
     case DeviceType::TCM:
-      device = std::make_unique<tcm::TCM>(desc);
+      device = std::make_unique<periph::tcm::TCM>(desc);
       break;
     case DeviceType::HostExit:
-      device = std::make_unique<host_exit::HostExit>(desc);
+      device = std::make_unique<periph::host_exit::HostExit>(desc);
       break;
     }
 

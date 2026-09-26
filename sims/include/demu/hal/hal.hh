@@ -9,10 +9,7 @@
 
 // Peripherals
 // TCM
-#include "peripheral/tcm/tcm.hh"
+#include "periph/tcm/tcm.hh"
 
 // Host exit
-#include "peripheral/host_exit/host_exit.hh"
-
-// Interrupt
-#include "peripheral/interrupt/interrupt_line.hh"
+#include "periph/host_exit/host_exit.hh"
