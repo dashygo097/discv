@@ -1,7 +1,7 @@
 #pragma once
 
 #include "demu/hal/device.hh"
-#include "demu/hal/transaction.hh"
+#include "demu/hal/mmio_target.hh"
 
 namespace demu::hal::periph::host_exit {
 

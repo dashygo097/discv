@@ -55,11 +55,21 @@ public:
 
   // Direct access
   [[nodiscard]] auto data() noexcept -> byte_t * { return memory_.data(); }
+  [[nodiscard]] auto data() const noexcept -> const byte_t * {
+    return memory_.data();
+  }
   [[nodiscard]] auto size() const noexcept -> size_t { return memory_.size(); }
   [[nodiscard]] auto base_address() const noexcept -> addr_t {
     return base_addr_;
   }
   [[nodiscard]] auto get_ptr(addr_t addr) -> byte_t * {
+    if (!is_valid_addr(addr)) {
+      HAL_WARN("Invalid memory access at address 0x{:08x}", addr);
+      return nullptr;
+    }
+    return &memory_[to_offset(addr)];
+  }
+  [[nodiscard]] auto get_ptr(addr_t addr) const -> const byte_t * {
     if (!is_valid_addr(addr)) {
       HAL_WARN("Invalid memory access at address 0x{:08x}", addr);
       return nullptr;

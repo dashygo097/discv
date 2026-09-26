@@ -26,7 +26,7 @@ void trace_transaction(const Transaction &transaction,
 auto DeviceManager::configure() -> bool {
   ports_.clear();
   devices_.clear();
-  device_map_.clear();
+  mmio_map_.clear();
   name_indices_.clear();
   pending_.clear();
   events_.clear();
@@ -51,45 +51,58 @@ auto DeviceManager::configure() -> bool {
       return false;
     }
 
-    const auto first = device->base_address();
-    const auto last = first + static_cast<addr_t>(device->address_range() - 1);
-    auto next = device_map_.lower_bound(first);
-    if (next != device_map_.end() && next->first <= last) {
-      HAL_WARN("Device '{}' overlaps device '{}'", desc.name,
-               next->second->name())
-      return false;
-    }
-    if (next != device_map_.begin()) {
-      const auto previous = std::prev(next);
-      const auto previous_last =
-          previous->first +
-          static_cast<addr_t>(previous->second->address_range() - 1);
-      if (previous_last >= first) {
-        HAL_WARN("Device '{}' overlaps device '{}'", desc.name,
-                 previous->second->name())
+    auto *mmio = dynamic_cast<MmioTarget *>(device.get());
+    const auto id = static_cast<device_id_t>(devices_.size());
+
+    if (mmio != nullptr) {
+      if (mmio->size() == 0) {
+        HAL_WARN("MMIO target '{}' has an empty address range", desc.name)
         return false;
       }
+
+      const auto first = mmio->base_address();
+      const auto last = first + static_cast<addr_t>(mmio->size() - 1);
+      auto next = mmio_map_.lower_bound(first);
+      if (next != mmio_map_.end() && next->first <= last) {
+        HAL_WARN("MMIO target '{}' overlaps MMIO target '{}'", desc.name,
+                 devices_[next->second].device->name())
+        return false;
+      }
+      if (next != mmio_map_.begin()) {
+        const auto previous = std::prev(next);
+        const auto &previous_slot = devices_[previous->second];
+        const auto previous_last = previous->first +
+                                   static_cast<addr_t>(
+                                       previous_slot.mmio->size() - 1);
+        if (previous_last >= first) {
+          HAL_WARN("MMIO target '{}' overlaps MMIO target '{}'", desc.name,
+                   previous_slot.device->name())
+          return false;
+        }
+      }
+      mmio_map_.emplace(first, id);
+    } else if (desc.load) {
+      HAL_WARN("Load device '{}' is not an MMIO target", desc.name)
+      return false;
     }
 
-    const auto id = static_cast<device_id_t>(devices_.size());
     name_indices_.emplace(std::string(desc.name), id);
-    device_map_.emplace(first, device.get());
-    devices_.push_back(DeviceSlot{desc, std::move(device)});
+    devices_.push_back(DeviceSlot{std::move(device), mmio, desc.load,
+                                  static_cast<addr_t>(desc.load_address)});
   }
   return true;
 }
 
 auto DeviceManager::load_binary(const std::string &filename) -> bool {
   for (auto &slot : devices_) {
-    if (!slot.desc.load) {
+    if (!slot.load) {
       continue;
     }
-    if (slot.device->allocator() == nullptr) {
-      HAL_WARN("Load device '{}' has no mapped storage", slot.desc.name)
+    if (slot.mmio == nullptr) {
+      HAL_WARN("Load device '{}' has no MMIO target", slot.device->name())
       return false;
     }
-    return slot.device->load_binary(
-        filename, static_cast<addr_t>(slot.desc.load_address));
+    return slot.mmio->load_binary(filename, slot.load_address);
   }
   HAL_WARN("No configured device has a load address")
   return false;
@@ -109,30 +122,31 @@ auto DeviceManager::get_device_by_name(std::string_view name) const noexcept
                                       : devices_[found->second].device.get();
 }
 
-auto DeviceManager::find_device_for_address(addr_t address) noexcept
-    -> Device * {
-  if (device_map_.empty()) {
+auto DeviceManager::find_mmio_target(addr_t address) noexcept -> MmioTarget * {
+  if (mmio_map_.empty()) {
     return nullptr;
   }
-  auto target = device_map_.upper_bound(address);
-  if (target == device_map_.begin()) {
+  auto target = mmio_map_.upper_bound(address);
+  if (target == mmio_map_.begin()) {
     return nullptr;
   }
   --target;
-  return target->second->owns_address(address) ? target->second : nullptr;
+  auto *mmio = devices_[target->second].mmio;
+  return mmio->owns_address(address) ? mmio : nullptr;
 }
 
-auto DeviceManager::find_device_for_address(addr_t address) const noexcept
-    -> const Device * {
-  if (device_map_.empty()) {
+auto DeviceManager::find_mmio_target(addr_t address) const noexcept
+    -> const MmioTarget * {
+  if (mmio_map_.empty()) {
     return nullptr;
   }
-  auto target = device_map_.upper_bound(address);
-  if (target == device_map_.begin()) {
+  auto target = mmio_map_.upper_bound(address);
+  if (target == mmio_map_.begin()) {
     return nullptr;
   }
   --target;
-  return target->second->owns_address(address) ? target->second : nullptr;
+  const auto *mmio = devices_[target->second].mmio;
+  return mmio->owns_address(address) ? mmio : nullptr;
 }
 
 auto DeviceManager::submit(port_id_t port,
@@ -149,29 +163,16 @@ auto DeviceManager::submit(port_id_t port,
     return std::nullopt;
   }
 
-  auto *device = find_device_for_address(transaction.address);
+  auto *target = find_mmio_target(transaction.address);
   const auto id = next_transaction_++;
-  if (device == nullptr) {
-    HAL_WARN("No device on '{}' owns address 0x{:08x}", port_desc.name,
-             transaction.address)
-    pending_.emplace(id,
-                     PendingTransaction{
-                         nullptr,
-                         transaction,
-                         Response{ResponseStatus::DecodeError},
-                     });
-    return id;
-  }
-
-  auto *target = dynamic_cast<MmioTarget *>(device);
   if (target == nullptr) {
-    HAL_WARN("Device '{}' is not an MMIO target", device->name())
-    pending_.emplace(id,
-                     PendingTransaction{
-                         nullptr,
-                         transaction,
-                         Response{ResponseStatus::Unsupported},
-                     });
+    HAL_WARN("No MMIO target on '{}' owns address 0x{:08x}", port_desc.name,
+             transaction.address)
+    pending_.emplace(id, PendingTransaction{
+                             nullptr,
+                             transaction,
+                             Response{ResponseStatus::DecodeError},
+                         });
     return id;
   }
 
@@ -244,12 +245,15 @@ void DeviceManager::clock_tick() noexcept {
   }
 }
 
-void DeviceManager::dump_device_map() const {
-  HAL_INFO("--- Device Map Summary ---")
+void DeviceManager::dump_mmio_map() const {
+  HAL_INFO("--- MMIO Map Summary ---")
   for (const auto &slot : devices_) {
-    const auto first = slot.device->base_address();
-    const auto last = first + slot.device->address_range() - 1;
-    HAL_INFO("{:<12} [0x{:08X} - 0x{:08X}]", slot.desc.name, first, last)
+    if (slot.mmio == nullptr) {
+      continue;
+    }
+    const auto first = slot.mmio->base_address();
+    const auto last = first + slot.mmio->size() - 1;
+    HAL_INFO("{:<12} [0x{:08X} - 0x{:08X}]", slot.device->name(), first, last)
   }
 }
 

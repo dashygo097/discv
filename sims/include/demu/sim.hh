@@ -31,8 +31,8 @@ public:
   void run(std::uint64_t max_cycles = 0);
   void terminate() noexcept { terminate_ = true; }
 
-  [[nodiscard]] auto device(addr_t addr) -> hal::Device * {
-    return device_manager_->find_device_for_address(addr);
+  [[nodiscard]] auto mmio_target(addr_t addr) -> hal::MmioTarget * {
+    return device_manager_->find_mmio_target(addr);
   }
   [[nodiscard]] auto pc() const noexcept -> addr_t { return last_retire_pc_; }
   [[nodiscard]] auto reg(std::uint8_t reg) const noexcept -> word_t {

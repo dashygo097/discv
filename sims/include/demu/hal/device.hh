@@ -1,60 +1,33 @@
 #pragma once
 
-#include "demu/hal/allocator.hh"
-#include "demu/hal/hardware.hh"
 #include "demu/hal/platform.hh"
-#include <utility>
+#include <string>
+#include <string_view>
 
 namespace demu::hal {
 
-class Device : public Hardware {
+class Device {
 public:
-  explicit Device(DeviceDescriptor desc) : desc_(std::move(desc)) {}
+  Device(std::string_view name, DeviceType type) : name_(name), type_(type) {}
 
-  ~Device() override = default;
+  virtual ~Device() = default;
 
-  [[nodiscard]] auto base_address() const noexcept -> addr_t {
-    return static_cast<addr_t>(desc_.base);
-  }
-  [[nodiscard]] auto address_range() const noexcept -> size_t {
-    return static_cast<size_t>(desc_.size);
-  }
-  [[nodiscard]] auto name() const noexcept -> const char * override {
-    return desc_.name.data();
-  }
-  [[nodiscard]] auto device_type() const noexcept -> DeviceType {
-    return desc_.type;
-  }
-  [[nodiscard]] auto descriptor() const noexcept -> const DeviceDescriptor & {
-    return desc_;
-  }
+  Device(const Device &) = delete;
+  auto operator=(const Device &) -> Device & = delete;
+  Device(Device &&) = delete;
+  auto operator=(Device &&) -> Device & = delete;
 
-  [[nodiscard]] auto owns_address(addr_t addr) const noexcept -> bool {
-    const addr_t base = base_address();
-    return addr >= base && addr < (base + address_range());
-  }
-  [[nodiscard]] auto is_valid_offset(addr_t offset) const noexcept -> bool {
-    return offset < address_range();
-  }
-  [[nodiscard]] auto to_offset(addr_t addr) const noexcept -> addr_t {
-    return addr - base_address();
-  }
+  virtual void clock_tick() = 0;
+  virtual void reset() = 0;
 
-  [[nodiscard]] virtual auto allocator() const noexcept -> MemoryAllocator * {
-    return nullptr;
+  [[nodiscard]] auto name() const noexcept -> const char * {
+    return name_.c_str();
   }
-  virtual void dump(addr_t start, size_t size) const noexcept {}
-
-  auto load_binary(const std::string &filename, addr_t offset = 0) -> bool {
-    auto *alloc = allocator();
-    if (!alloc) {
-      return false;
-    }
-    return alloc->load_binary(filename, offset);
-  }
+  [[nodiscard]] auto type() const noexcept -> DeviceType { return type_; }
 
 private:
-  DeviceDescriptor desc_;
+  std::string name_;
+  DeviceType type_;
 };
 
 } // namespace demu::hal

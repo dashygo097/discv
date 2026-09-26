@@ -3,7 +3,7 @@
 #include "allocator.hh"
 #include "device.hh"
 #include "device_manager.hh"
-#include "hardware.hh"
+#include "mmio_target.hh"
 #include "platform.hh"
 #include "transaction.hh"
 

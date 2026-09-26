@@ -1,9 +1,7 @@
 #pragma once
 
-#include "demu/hal/platform.hh"
 #include "demu/types.hh"
 #include <cstdint>
-#include <optional>
 
 namespace demu::hal {
 
@@ -46,22 +44,6 @@ struct Response {
   [[nodiscard]] auto error() const noexcept -> bool {
     return status != ResponseStatus::Okay;
   }
-};
-
-class MmioTarget {
-public:
-  virtual ~MmioTarget() = default;
-
-  [[nodiscard]] virtual auto submit(transaction_id_t id,
-                                    const Transaction &transaction) noexcept
-      -> std::optional<Response> = 0;
-
-  [[nodiscard]] virtual auto poll(transaction_id_t) noexcept
-      -> std::optional<Response> {
-    return std::nullopt;
-  }
-
-  virtual void complete(transaction_id_t) noexcept {}
 };
 
 } // namespace demu::hal

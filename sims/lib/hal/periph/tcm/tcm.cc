@@ -13,26 +13,26 @@ auto TCM::submit(transaction_id_t, const Transaction &transaction) noexcept
   }
 
   const addr_t aligned_address = transaction.address & ~addr_t{0x3U};
-  if (!memory_->is_valid_range(aligned_address, sizeof(word_t))) {
+  if (!memory().is_valid_range(aligned_address, sizeof(word_t))) {
     return Response{ResponseStatus::DecodeError};
   }
 
   if (transaction.access == AccessType::Write) {
     for (std::uint32_t byte = 0; byte < sizeof(word_t); ++byte) {
       if ((transaction.strobe & (byte_t{1} << byte)) != 0) {
-        memory_->write_byte(
+        memory().write_byte(
             aligned_address + byte,
             static_cast<byte_t>(transaction.data >> (byte * 8U)));
       }
     }
     return Response{};
   }
-  return Response{ResponseStatus::Okay, memory_->read_word(aligned_address)};
+  return Response{ResponseStatus::Okay, memory().read_word(aligned_address)};
 }
 
 void TCM::clock_tick() {}
 
-void TCM::reset() { memory_->clear(); }
+void TCM::reset() { memory().clear(); }
 
 void TCM::dump(addr_t start, size_t size) const noexcept {
   if (!owns_address(start)) {
@@ -41,12 +41,12 @@ void TCM::dump(addr_t start, size_t size) const noexcept {
   }
 
   const size_t clamped = std::min(
-      size, static_cast<size_t>(base_address() + address_range() - start));
+      size, static_cast<size_t>(base_address() + this->size() - start));
 
   HAL_INFO("TCM dump [0x{:08X} - 0x{:08X}]:", static_cast<uint64_t>(start),
            static_cast<uint64_t>(start + clamped));
 
-  const byte_t *ptr = memory_->get_ptr(start);
+  const byte_t *ptr = memory().get_ptr(start);
   if (!ptr) {
     return;
   }

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "demu/hal/device.hh"
+#include "demu/hal/mmio_target.hh"
 #include "demu/hal/platform.hh"
 #include "demu/hal/transaction.hh"
 #include <deque>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -32,10 +32,9 @@ public:
       -> Device *;
   [[nodiscard]] auto get_device_by_name(std::string_view name) const noexcept
       -> const Device *;
-  [[nodiscard]] auto find_device_for_address(addr_t address) noexcept
-      -> Device *;
-  [[nodiscard]] auto find_device_for_address(addr_t address) const noexcept
-      -> const Device *;
+  [[nodiscard]] auto find_mmio_target(addr_t address) noexcept -> MmioTarget *;
+  [[nodiscard]] auto find_mmio_target(addr_t address) const noexcept
+      -> const MmioTarget *;
 
   [[nodiscard]] auto submit(port_id_t port,
                             const Transaction &transaction) noexcept
@@ -47,12 +46,14 @@ public:
 
   void reset() noexcept;
   void clock_tick() noexcept;
-  void dump_device_map() const;
+  void dump_mmio_map() const;
 
 private:
   struct DeviceSlot {
-    DeviceDescriptor desc;
     std::unique_ptr<Device> device;
+    MmioTarget *mmio;
+    bool load;
+    addr_t load_address;
   };
 
   struct PendingTransaction {
@@ -63,7 +64,7 @@ private:
 
   std::vector<PortDescriptor> ports_;
   std::vector<DeviceSlot> devices_;
-  std::map<addr_t, Device *> device_map_;
+  std::map<addr_t, device_id_t> mmio_map_;
   std::unordered_map<std::string, device_id_t> name_indices_;
   std::unordered_map<transaction_id_t, PendingTransaction> pending_;
   std::deque<DeviceEvent> events_;

@@ -42,7 +42,7 @@ void DemuSimulator::init() {
   if (!device_manager_->configure()) {
     DEMU_ERROR("Failed to configure the simulated platform")
   }
-  device_manager_->dump_device_map();
+  device_manager_->dump_mmio_map();
 
 #ifdef ENABLE_TRACE
   if (trace_enabled_) {
@@ -116,8 +116,8 @@ void DemuSimulator::run(std::uint64_t max_cycles) {
 }
 
 void DemuSimulator::accept_retirement(addr_t pc, instr_t instruction,
-                                      std::uint8_t rd, word_t data,
-                                      bool write, bool illegal) noexcept {
+                                      std::uint8_t rd, word_t data, bool write,
+                                      bool illegal) noexcept {
   ++instret_count_;
   last_retire_pc_ = pc;
 
@@ -178,8 +178,7 @@ auto DemuSimulator::submit_transaction(
   return device_manager_->submit(port, transaction);
 }
 
-auto DemuSimulator::poll_transaction(
-    hal::transaction_id_t transaction) noexcept
+auto DemuSimulator::poll_transaction(hal::transaction_id_t transaction) noexcept
     -> std::optional<hal::Response> {
   return device_manager_->poll(transaction);
 }
@@ -194,13 +193,13 @@ void DemuSimulator::dump_registers() const {
   for (std::size_t index = 0; index < NUM_ARCH_REGS; index += 4) {
     DEMU_INFO(
         "  x{:02d}={:08x}  x{:02d}={:08x}  x{:02d}={:08x}  x{:02d}={:08x}",
-        index, reg(index), index + 1, reg(index + 1), index + 2,
-        reg(index + 2), index + 3, reg(index + 3))
+        index, reg(index), index + 1, reg(index + 1), index + 2, reg(index + 2),
+        index + 3, reg(index + 3))
   }
 }
 
 void DemuSimulator::dump_memory(addr_t start, std::size_t size) const {
-  const auto *target = device_manager_->find_device_for_address(start);
+  const auto *target = device_manager_->find_mmio_target(start);
   if (target == nullptr) {
     HAL_WARN("Invalid memory dump address: 0x{:08x}", start)
     return;
