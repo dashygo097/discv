@@ -1,6 +1,6 @@
 #pragma once
 
-#include "demu/hal/allocator.hh"
+#include "demu/hal/memory/allocator.hh"
 #include "demu/hal/platform.hh"
 #include "demu/hal/transaction.hh"
 #include <optional>
@@ -27,8 +27,11 @@ public:
     return memory_.is_valid_addr(address);
   }
 
-  [[nodiscard]] auto memory() noexcept -> MemoryAllocator & { return memory_; }
-  [[nodiscard]] auto memory() const noexcept -> const MemoryAllocator & {
+  [[nodiscard]] auto memory() noexcept -> memory::MemoryAllocator & {
+    return memory_;
+  }
+  [[nodiscard]] auto memory() const noexcept
+      -> const memory::MemoryAllocator & {
     return memory_;
   }
 
@@ -51,7 +54,7 @@ public:
   virtual void complete(transaction_id_t) noexcept {}
 
 private:
-  MemoryAllocator memory_;
+  memory::MemoryAllocator memory_;
 };
 
 } // namespace demu::hal

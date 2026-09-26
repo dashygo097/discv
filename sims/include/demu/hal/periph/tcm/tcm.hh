@@ -7,10 +7,7 @@ namespace demu::hal::periph::tcm {
 
 class TCM final : public Device, public MmioTarget {
 public:
-  explicit TCM(const DeviceDescriptor &desc)
-      : Device(desc.name, desc.type),
-        MmioTarget(static_cast<addr_t>(desc.base),
-                   static_cast<size_t>(desc.size)) {}
+  explicit TCM(const DeviceDescriptor &desc);
 
   ~TCM() override = default;
 

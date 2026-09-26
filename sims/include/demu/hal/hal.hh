@@ -1,13 +1,18 @@
 #pragma once
 
-#include "allocator.hh"
 #include "device.hh"
 #include "device_manager.hh"
 #include "mmio_target.hh"
 #include "platform.hh"
 #include "transaction.hh"
 
+// Memory Wrappers
+#include "memory/allocator.hh"
+
 // Peripherals
+// Console
+#include "periph/console/console.hh"
+
 // TCM
 #include "periph/tcm/tcm.hh"
 

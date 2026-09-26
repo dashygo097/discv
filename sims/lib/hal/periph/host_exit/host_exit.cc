@@ -9,7 +9,7 @@ HostExit::HostExit(const DeviceDescriptor &desc)
 
 void HostExit::clock_tick() {}
 
-void HostExit::reset() {}
+void HostExit::reset() { memory().clear(); }
 
 auto HostExit::submit(transaction_id_t, const Transaction &transaction) noexcept
     -> std::optional<Response> {
@@ -23,8 +23,11 @@ auto HostExit::submit(transaction_id_t, const Transaction &transaction) noexcept
     return Response{ResponseStatus::SlaveError};
   }
 
+  memory().write_word(transaction.address, transaction.data);
+
   return Response{ResponseStatus::Okay, 0,
-                  DeviceEvent{DeviceEventType::Exit, transaction.data}};
+                  DeviceEvent{DeviceEventType::Exit,
+                              memory().read_word(transaction.address)}};
 }
 
 } // namespace demu::hal::periph::host_exit

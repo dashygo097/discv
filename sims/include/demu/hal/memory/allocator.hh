@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace demu::hal {
+namespace demu::hal::memory {
 
 class MemoryAllocator final {
 public:
@@ -83,4 +83,4 @@ private:
   addr_t base_addr_;
 };
 
-} // namespace demu::hal
+} // namespace demu::hal::memory

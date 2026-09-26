@@ -46,7 +46,9 @@ command=(
 if [[ "${SIM_TRACE}" == true ]]; then
   command+=(--trace)
 fi
-command+=("${sim_args[@]}")
+if (( ${#sim_args[@]} > 0 )); then
+  command+=("${sim_args[@]}")
+fi
 command+=("${PROGRAM}")
 
 cd "${STAGE_WORK_DIR}"

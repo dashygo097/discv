@@ -95,6 +95,12 @@ required_variables = []
 # base = 0x10000000
 # size = 0x00000004
 
+# [[simulation.devices]]
+# name = "console"
+# type = "console"
+# base = 0x10000004
+# size = 0x00000004
+
 # [flow.synth.dc]
 # target_libraries = ["/absolute/path/to/slow.db"]
 # link_libraries = []

@@ -6,6 +6,11 @@
 
 namespace demu::hal::periph::tcm {
 
+TCM::TCM(const DeviceDescriptor &desc)
+    : Device(desc.name, desc.type), MmioTarget(static_cast<addr_t>(desc.base),
+                                               static_cast<size_t>(desc.size)) {
+}
+
 auto TCM::submit(transaction_id_t, const Transaction &transaction) noexcept
     -> std::optional<Response> {
   if (transaction.size != sizeof(word_t)) {

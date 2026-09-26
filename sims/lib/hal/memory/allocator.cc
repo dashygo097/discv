@@ -1,10 +1,10 @@
-#include "demu/hal/allocator.hh"
+#include "demu/hal/memory/allocator.hh"
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 
-namespace demu::hal {
+namespace demu::hal::memory {
 
 MemoryAllocator::MemoryAllocator(addr_t base_addr, size_t size)
     : memory_(size, 0), base_addr_(base_addr) {
@@ -103,4 +103,4 @@ void MemoryAllocator::dump(addr_t start, addr_t length) const {
   return addr - base_addr_;
 }
 
-} // namespace demu::hal
+} // namespace demu::hal::memory

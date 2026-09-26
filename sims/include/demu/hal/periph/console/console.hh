@@ -4,7 +4,8 @@
 #include "demu/hal/mmio_target.hh"
 
 namespace demu::hal::periph::console {
-class Console : public Device, public MmioTarget {
+
+class Console final : public Device, public MmioTarget {
 public:
   explicit Console(const DeviceDescriptor &desc);
 
@@ -14,7 +15,6 @@ public:
   [[nodiscard]] auto submit(transaction_id_t,
                             const Transaction &transaction) noexcept
       -> std::optional<Response> override;
-
-private:
 };
+
 } // namespace demu::hal::periph::console

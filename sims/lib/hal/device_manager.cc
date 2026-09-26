@@ -1,5 +1,6 @@
 #include "demu/hal/device_manager.hh"
 #include "demu/generated/platform.hh"
+#include "demu/hal/periph/console/console.hh"
 #include "demu/hal/periph/host_exit/host_exit.hh"
 #include "demu/hal/periph/tcm/tcm.hh"
 #include "demu/logger.hh"
@@ -41,6 +42,9 @@ auto DeviceManager::configure() -> bool {
     case DeviceType::TCM:
       device = std::make_unique<periph::tcm::TCM>(desc);
       break;
+    case DeviceType::Console:
+      device = std::make_unique<periph::console::Console>(desc);
+      break;
     case DeviceType::HostExit:
       device = std::make_unique<periph::host_exit::HostExit>(desc);
       break;
@@ -71,9 +75,9 @@ auto DeviceManager::configure() -> bool {
       if (next != mmio_map_.begin()) {
         const auto previous = std::prev(next);
         const auto &previous_slot = devices_[previous->second];
-        const auto previous_last = previous->first +
-                                   static_cast<addr_t>(
-                                       previous_slot.mmio->size() - 1);
+        const auto previous_last =
+            previous->first +
+            static_cast<addr_t>(previous_slot.mmio->size() - 1);
         if (previous_last >= first) {
           HAL_WARN("MMIO target '{}' overlaps MMIO target '{}'", desc.name,
                    previous_slot.device->name())

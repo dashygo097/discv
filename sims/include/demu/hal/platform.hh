@@ -11,6 +11,7 @@ using transaction_id_t = std::uint64_t;
 
 enum class DeviceType {
   TCM,
+  Console,
   HostExit,
 };
 

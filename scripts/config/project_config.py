@@ -771,9 +771,9 @@ def normalize_simulation(raw, architecture, *, required):
         device_names.add(name)
 
         device_type = require_string(device, "type", location)
-        if device_type not in {"tcm", "host_exit"}:
+        if device_type not in {"tcm", "console", "host_exit"}:
             raise ConfigError(
-                f'{location}.type: expected "tcm" or "host_exit"'
+                f'{location}.type: expected "tcm", "console", or "host_exit"'
             )
         base = unsigned_integer(device.get("base"), f"{location}.base")
         size = unsigned_integer(
@@ -1329,6 +1329,7 @@ def render_demu_platform(config, digest):
     devices = simulation["devices"]
     type_names = {
         "tcm": "TCM",
+        "console": "Console",
         "host_exit": "HostExit",
     }
     port_entries = []
