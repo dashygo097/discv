@@ -82,7 +82,7 @@ void DemuSimulator::reset(std::uint64_t cycles) {
 }
 
 void DemuSimulator::step(std::uint64_t cycles) {
-  for (std::uint64_t cycle = 0; cycle < cycles && !terminate_; ++cycle) {
+  for (std::uint64_t cycle = 0; cycle < cycles && !is_terminate(); ++cycle) {
     clock_tick();
   }
 }
@@ -92,7 +92,7 @@ void DemuSimulator::run(std::uint64_t max_cycles) {
   DEMU_INFO("Starting DEMU Simulation...")
   const auto start = std::chrono::high_resolution_clock::now();
   on_init();
-  while (cycle_count_ < target && !terminate_) {
+  while (cycle_count_ < target && !is_terminate()) {
     clock_tick();
   }
   on_exit();
@@ -101,7 +101,7 @@ void DemuSimulator::run(std::uint64_t max_cycles) {
       std::chrono::duration_cast<std::chrono::microseconds>(finish - start)
           .count();
 
-  if (!terminate_) {
+  if (!is_terminate()) {
     exit_code_ = 1;
     DEMU_WARN("Simulation TIME OUT after {} cycles", cycle_count_)
   }
@@ -156,12 +156,6 @@ void DemuSimulator::clock_tick() {
   dut_->clk_i = 1;
   dut_->eval();
   device_manager_->clock_tick();
-  while (const auto event = device_manager_->take_event()) {
-    if (event->type == hal::DeviceEventType::Exit) {
-      exit_code_ = event->value;
-      terminate_ = true;
-    }
-  }
 
   ++cycle_count_;
   on_clock_tick();

@@ -4,6 +4,7 @@
 #include "demu/hal/periph/host_exit/host_exit.hh"
 #include "demu/hal/periph/tcm/tcm.hh"
 #include "demu/logger.hh"
+#include <cstdio>
 #include <utility>
 
 namespace demu::hal {
@@ -30,8 +31,9 @@ auto DeviceManager::configure() -> bool {
   mmio_map_.clear();
   name_indices_.clear();
   pending_.clear();
-  events_.clear();
   next_transaction_ = 1;
+  exit_requested_ = false;
+  exit_code_ = 0;
 
   ports_.assign(generated::PORTS.begin(), generated::PORTS.end());
   devices_.reserve(generated::DEVICES.size());
@@ -218,26 +220,33 @@ auto DeviceManager::complete(transaction_id_t transaction) noexcept -> bool {
   if (pending.target != nullptr) {
     pending.target->complete(transaction);
   }
-  if (pending.response->event.type != DeviceEventType::None) {
-    events_.push_back(pending.response->event);
-  }
+  handle_event(pending.response->event);
   pending_.erase(found);
   return true;
 }
 
-auto DeviceManager::take_event() noexcept -> std::optional<DeviceEvent> {
-  if (events_.empty()) {
-    return std::nullopt;
+void DeviceManager::handle_event(const DeviceEvent &event) noexcept {
+  switch (event.type) {
+  case DeviceEventType::None:
+    break;
+  case DeviceEventType::ConsoleWrite:
+    std::fputc(static_cast<int>(event.value), stdout);
+    std::fflush(stdout);
+    break;
+  case DeviceEventType::Exit:
+    if (!exit_requested_) {
+      exit_requested_ = true;
+      exit_code_ = event.value;
+    }
+    break;
   }
-  const auto event = events_.front();
-  events_.pop_front();
-  return event;
 }
 
 void DeviceManager::reset() noexcept {
   pending_.clear();
-  events_.clear();
   next_transaction_ = 1;
+  exit_requested_ = false;
+  exit_code_ = 0;
   for (auto &slot : devices_) {
     slot.device->reset();
   }

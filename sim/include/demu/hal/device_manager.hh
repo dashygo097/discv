@@ -4,7 +4,6 @@
 #include "demu/hal/mmio_target.hh"
 #include "demu/hal/platform.hh"
 #include "demu/hal/transaction.hh"
-#include <deque>
 #include <map>
 #include <memory>
 #include <optional>
@@ -42,7 +41,11 @@ public:
   [[nodiscard]] auto poll(transaction_id_t transaction) noexcept
       -> std::optional<Response>;
   auto complete(transaction_id_t transaction) noexcept -> bool;
-  [[nodiscard]] auto take_event() noexcept -> std::optional<DeviceEvent>;
+
+  [[nodiscard]] auto exit_requested() const noexcept -> bool {
+    return exit_requested_;
+  }
+  [[nodiscard]] auto exit_code() const noexcept -> word_t { return exit_code_; }
 
   void reset() noexcept;
   void clock_tick() noexcept;
@@ -62,13 +65,16 @@ private:
     std::optional<Response> response;
   };
 
+  void handle_event(const DeviceEvent &event) noexcept;
+
   std::vector<PortDescriptor> ports_;
   std::vector<DeviceSlot> devices_;
   std::map<addr_t, device_id_t> mmio_map_;
   std::unordered_map<std::string, device_id_t> name_indices_;
   std::unordered_map<transaction_id_t, PendingTransaction> pending_;
-  std::deque<DeviceEvent> events_;
   transaction_id_t next_transaction_{1};
+  bool exit_requested_{false};
+  word_t exit_code_{0};
 };
 
 } // namespace demu::hal

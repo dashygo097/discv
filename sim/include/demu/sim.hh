@@ -39,9 +39,12 @@ public:
     return register_values_[reg];
   }
   [[nodiscard]] auto is_terminate() const noexcept -> bool {
-    return terminate_;
+    return terminate_ || device_manager_->exit_requested();
   }
-  [[nodiscard]] auto exit_code() const noexcept -> word_t { return exit_code_; }
+  [[nodiscard]] auto exit_code() const noexcept -> word_t {
+    return device_manager_->exit_requested() ? device_manager_->exit_code()
+                                             : exit_code_;
+  }
 
   void timeout(std::uint64_t timeout) noexcept { timeout_ = timeout; }
 

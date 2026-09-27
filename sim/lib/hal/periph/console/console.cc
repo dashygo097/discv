@@ -1,30 +1,27 @@
 #include "demu/hal/periph/console/console.hh"
 #include <cstdint>
-#include <cstdio>
 
 namespace demu::hal::periph::console {
 
 Console::Console(const DeviceDescriptor &desc)
     : Device(desc.name, desc.type), MmioTarget(static_cast<addr_t>(desc.base),
-                                               static_cast<size_t>(desc.size)) {
+                                               static_cast<size_t>(desc.size)),
+      registers_(memory()) {
+  (void)registers_.add(memory::RegisterDescriptor{}
+                           .offset(DATA_OFFSET)
+                           .reset_value(0)
+                           .writeonly());
 }
 
 void Console::clock_tick() {}
 
-void Console::reset() { memory().clear(); }
+void Console::reset() { registers_.reset(); }
 
 auto Console::submit(transaction_id_t, const Transaction &transaction) noexcept
     -> std::optional<Response> {
-  if (transaction.access != AccessType::Write) {
-    return Response{ResponseStatus::Unsupported};
-  }
-  if (transaction.size != sizeof(word_t)) {
-    return Response{ResponseStatus::Unsupported};
-  }
-
-  const addr_t aligned_address = transaction.address & ~addr_t{0x3U};
-  if (!memory().is_valid_range(aligned_address, sizeof(word_t))) {
-    return Response{ResponseStatus::DecodeError};
+  auto response = registers_.access(transaction);
+  if (response.error()) {
+    return response;
   }
 
   bool character_written = false;
@@ -35,7 +32,6 @@ auto Console::submit(transaction_id_t, const Transaction &transaction) noexcept
     }
 
     const auto value = static_cast<byte_t>(transaction.data >> (byte * 8U));
-    memory().write_byte(aligned_address + byte, value);
     if (!character_written) {
       character = value;
       character_written = true;
@@ -46,10 +42,9 @@ auto Console::submit(transaction_id_t, const Transaction &transaction) noexcept
     return Response{ResponseStatus::SlaveError};
   }
 
-  std::fputc(static_cast<int>(character), stdout);
-  std::fflush(stdout);
-
-  return Response{};
+  response.event = DeviceEvent{DeviceEventType::ConsoleWrite,
+                               static_cast<word_t>(character)};
+  return response;
 }
 
 } // namespace demu::hal::periph::console

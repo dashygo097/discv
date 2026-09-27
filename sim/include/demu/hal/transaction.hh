@@ -20,6 +20,7 @@ enum class ResponseStatus : std::uint8_t {
 
 enum class DeviceEventType : std::uint8_t {
   None,
+  ConsoleWrite,
   Exit,
 };
 

@@ -4,30 +4,33 @@ namespace demu::hal::periph::host_exit {
 
 HostExit::HostExit(const DeviceDescriptor &desc)
     : Device(desc.name, desc.type), MmioTarget(static_cast<addr_t>(desc.base),
-                                               static_cast<size_t>(desc.size)) {
+                                               static_cast<size_t>(desc.size)),
+      registers_(memory()) {
+  (void)registers_.add(memory::RegisterDescriptor{}
+                           .offset(EXIT_CODE_OFFSET)
+                           .reset_value(0)
+                           .writeonly());
 }
 
 void HostExit::clock_tick() {}
 
-void HostExit::reset() { memory().clear(); }
+void HostExit::reset() { registers_.reset(); }
 
 auto HostExit::submit(transaction_id_t, const Transaction &transaction) noexcept
     -> std::optional<Response> {
-  if (transaction.access != AccessType::Write) {
-    return Response{ResponseStatus::Unsupported};
-  }
-
-  if (transaction.address != base_address() ||
-      transaction.size != sizeof(word_t) ||
+  if (transaction.access == AccessType::Write &&
       transaction.strobe != byte_t{0x0F}) {
     return Response{ResponseStatus::SlaveError};
   }
 
-  memory().write_word(transaction.address, transaction.data);
+  auto response = registers_.access(transaction);
+  if (response.error()) {
+    return response;
+  }
 
-  return Response{ResponseStatus::Okay, 0,
-                  DeviceEvent{DeviceEventType::Exit,
-                              memory().read_word(transaction.address)}};
+  response.event =
+      DeviceEvent{DeviceEventType::Exit, registers_.value(EXIT_CODE_OFFSET)};
+  return response;
 }
 
 } // namespace demu::hal::periph::host_exit
