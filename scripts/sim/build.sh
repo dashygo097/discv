@@ -28,7 +28,7 @@ if [[ "${configured}" != true ]]; then
 fi
 
 cmake \
-  -S "${PROJECT_ROOT}/sims" \
+  -S "${PROJECT_ROOT}/sim" \
   -B "${SIM_MODEL_DIR}" \
   -DPROJECT_CONFIG_CMAKE="${SIM_CONFIG_CMAKE}" \
   -DOBJCACHE_ENABLED=OFF \

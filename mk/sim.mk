@@ -5,7 +5,7 @@ SIM_EXECUTABLE := $(SIM_MODEL_DIR)/bin/demu-riscv
 
 SIM_TOOLS ?=
 SIM_BUILD_STAMPS := $(addsuffix /model/.done,$(addprefix $(SIM_BUILD_DIR)/,$(SIM_TOOLS)))
-SIM_CPP_INPUTS := $(shell find $(PROJECT_ROOT)/sims -type f 2>/dev/null)
+SIM_CPP_INPUTS := $(shell find $(PROJECT_ROOT)/sim -type f 2>/dev/null)
 
 .PHONY: sim sim-run sim-build sim-build-run sim-clean
 
