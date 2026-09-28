@@ -1,4 +1,5 @@
 #include "demu/sim.hh"
+#include "demu/decoder.hh"
 #include "demu/dpi/runtime.hh"
 #include "demu/logger.hh"
 #include <chrono>
@@ -125,12 +126,10 @@ void DemuSimulator::accept_retirement(addr_t pc, instr_t instruction,
     register_values_[rd] = data;
     DEMU_REG_WRITE(rd, data)
   }
-  if (Logger::demu_should_log(spdlog::level::trace)) {
-    DEMU_TRACE("[RETIRE] Cycle {:6d} | PC=0x{:08x} | Instr=0x{:08x}",
-               cycle_count_, last_retire_pc_, instruction)
-  } else if (Logger::demu_should_log(spdlog::level::debug)) {
-    DEMU_DEBUG("[RETIRE] Cycle {:6d} | PC=0x{:08x} | Instr=0x{:08x}",
-               cycle_count_, last_retire_pc_, instruction)
+  if (Logger::demu_should_log(spdlog::level::debug)) {
+    DEMU_DEBUG("[RETIRE] Cycle {:6d} | PC=0x{:08x} | Instr=0x{:08x} ({})",
+               cycle_count_, last_retire_pc_, instruction,
+               Decoder(instruction).to_string())
   }
 
   if (illegal) {
