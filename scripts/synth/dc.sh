@@ -10,7 +10,7 @@ for variable in \
   PROJECT_ENV \
   RTL_TCL \
   CONSTRAINTS_SDC \
-  SYNTH_DC_CONFIG \
+  SYNTH_TOOL_CONFIG \
   STAGE_WORK_DIR \
   STAGE_REPORT_DIR \
   STAGE_RESULT_DIR; do
@@ -20,7 +20,7 @@ done
 require_file "${PROJECT_ENV}"
 require_file "${RTL_TCL}"
 require_file "${CONSTRAINTS_SDC}"
-require_file "${SYNTH_DC_CONFIG}"
+require_file "${SYNTH_TOOL_CONFIG}"
 require_file "${SCRIPT_DIR}/dc.tcl"
 
 # shellcheck source=/dev/null
@@ -35,7 +35,7 @@ if [[ "${SYNTH_DC_OPTION_COUNT}" -gt 0 ]]; then
 fi
 command+=(-f "${SCRIPT_DIR}/dc.tcl")
 
-export RTL_TCL CONSTRAINTS_SDC SYNTH_DC_CONFIG
+export RTL_TCL CONSTRAINTS_SDC SYNTH_TOOL_CONFIG
 export STAGE_WORK_DIR STAGE_REPORT_DIR STAGE_RESULT_DIR
 export BUILD_JOBS RTL_TOP
 

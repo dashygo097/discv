@@ -1701,13 +1701,18 @@ def render_outputs(config, config_path, project_root, output_dir):
         outputs["rtl.f"] = render_filelist(
             config, digest, project_root, output_dir
         )
-    if "dc" in config["flow"]["synth"]:
+    if config["flow"]["synth"]:
         outputs.update(
             {
                 "constraints.sdc": render_constraints_sdc(config, digest),
                 "rtl.tcl": render_rtl_tcl(
                     config, digest, project_root, output_dir
                 ),
+            }
+        )
+    if "dc" in config["flow"]["synth"]:
+        outputs.update(
+            {
                 "synth.dc.tcl": render_dc_tcl(config, digest),
             }
         )

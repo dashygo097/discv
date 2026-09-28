@@ -19,11 +19,6 @@ roots = ["rtl/protocols"]
 patterns = ["**/*.sv"]
 
 [[rtl.filesets]]
-name = "tech"
-roots = ["rtl/tech"]
-patterns = ["**/*.sv"]
-
-[[rtl.filesets]]
 name = "lib"
 roots = ["rtl/lib"]
 patterns = ["**/*.sv"]

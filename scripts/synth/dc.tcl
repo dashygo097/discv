@@ -16,7 +16,7 @@ proc project_main {} {
   project_require_environment {
     RTL_TCL
     CONSTRAINTS_SDC
-    SYNTH_DC_CONFIG
+    SYNTH_TOOL_CONFIG
     STAGE_WORK_DIR
     STAGE_REPORT_DIR
     STAGE_RESULT_DIR
@@ -25,7 +25,7 @@ proc project_main {} {
   }
 
   source $::env(RTL_TCL)
-  source $::env(SYNTH_DC_CONFIG)
+  source $::env(SYNTH_TOOL_CONFIG)
 
   if {$RTL_TOP ne $::env(RTL_TOP)} {
     error "generated RTL top does not match the stage environment"
