@@ -10,7 +10,7 @@ PYTHON_BIN=${PYTHON_BIN:-python3}
 VENV_DIR=${PROJECT_VENV_DIR:-${PROJECT_ROOT}/build/.venv}
 REQUIREMENTS=${SCRIPT_DIR}/requirements.txt
 
-require_python_version "${PYTHON_BIN}" 3 6
+require_python_version "${PYTHON_BIN}" 3 9
 require_file "${REQUIREMENTS}"
 
 if [[ -e "${VENV_DIR}" && ! -x "${VENV_DIR}/bin/python" ]]; then

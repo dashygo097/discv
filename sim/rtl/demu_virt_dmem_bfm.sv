@@ -22,15 +22,13 @@ module demu_virt_dmem_bfm
   longint unsigned transaction_r;
   dmem_rsp_t response_r;
 
-  function automatic int start_transaction(
-      input dmem_req_t payload,
-      output longint unsigned transaction,
-      output dmem_rsp_t transaction_response
-  );
+  function automatic int start_transaction(input dmem_req_t payload,
+                                           output longint unsigned transaction,
+                                           output dmem_rsp_t transaction_response);
     int unsigned data;
     bit error;
 
-    data  = '0;
+    data = '0;
     error = '0;
     transaction_response = '0;
 
@@ -59,10 +57,9 @@ module demu_virt_dmem_bfm
   end
 
   always_comb begin
-    request.ready = state_r == IDLE ||
-                    (state_r == HOLD_RESPONSE && response.ready);
+    request.ready = state_r == IDLE || (state_r == HOLD_RESPONSE && response.ready);
 
-    response.valid   = state_r == HOLD_RESPONSE;
+    response.valid = state_r == HOLD_RESPONSE;
     response.payload = response_r;
   end
 
@@ -82,7 +79,9 @@ module demu_virt_dmem_bfm
           end
         end
 
-        case (start_transaction(request.payload, transaction, transaction_response))
+        case (start_transaction(
+            request.payload, transaction, transaction_response
+        ))
           -1: $fatal(1, "Failed to start data transaction");
           0:  state_r <= WAIT_DEVICE;
           1: begin

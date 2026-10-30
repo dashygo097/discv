@@ -1,110 +1,115 @@
-schema_version = 5
+schema_version = 6
 
 [architecture]
 march = "rv32i"
 top = ""
 reset_vector = 0x00000000
 
-[rtl]
-
-[[rtl.filesets]]
-name = "packages"
-roots = ["rtl/pkgs"]
-# NOTE: list in turn for dependencies
-patterns = ["riscv_pkg.sv", "core_types_pkg.sv"]
-
-[[rtl.filesets]]
-name = "protocols"
-roots = ["rtl/protocols"]
-patterns = ["**/*.sv"]
-
-[[rtl.filesets]]
-name = "lib"
-roots = ["rtl/lib"]
-patterns = ["**/*.sv"]
-
-[[rtl.filesets]]
-name = "design"
-roots = ["rtl/core"]
-patterns = ["**/*.sv"]
-
-[[rtl.filesets]]
-name = "top"
-roots = ["rtl/top"]
-patterns = ["**/*.sv"]
+[bender]
+name = "discv"
+version = "0.32.1"
+dependencies = { common_cells = { git = "https://github.com/dashygo097/common_cells.git", rev = "main" } }
+sources = [
+  { include_dirs = [
+    "build/generated",
+    "rtl/pkgs",
+    "rtl/core",
+  ], files = [
+    "build/generated/arch_pkg.sv",
+    "rtl/pkgs/riscv_pkg.sv",
+    "rtl/pkgs/core_types_pkg.sv",
+    "rtl/core/**/*.sv",
+    "rtl/top/**/*.sv",
+  ] },
+  { target = "simulation", files = [
+    "build/generated/demu/generated/demu_platform_pkg.sv",
+    "sim/rtl/demu_dpi_pkg.sv",
+    "sim/rtl/demu_virt_imem_bfm.sv",
+    "sim/rtl/demu_virt_dmem_bfm.sv",
+    "sim/rtl/demu_retire_monitor.sv",
+    "sim/rtl/demu_sim_top.sv",
+  ] },
+]
 
 [build]
 jobs = 1
+technology = "generic"
+reproducible = false
 
-[environment]
-required_commands = ["bash"]
-required_variables = []
+[technology.generic]
+targets = ["generic"]
+
+[flow.lint.verilator]
+options = ["-Wno-fatal"]
+
+[flow.sim.verilator]
+targets = ["simulation"]
+options = ["-Wall", "-Wno-fatal"]
 
 [constraints]
+clocks = [
+  { name = "clk_i", period = 10.0, waveform = [
+    0.0,
+    5.0,
+  ], setup_uncertainty = 0.20, hold_uncertainty = 0.05, transition = 0.10 },
+]
+input_delays = [
+  { clock = "clk_i", ports = [
+    "imem_*_i",
+    "dmem_*_i",
+  ], max = 2.0, min = 0.2 },
+]
+output_delays = [
+  { clock = "clk_i", ports = [
+    "imem_*_o",
+    "dmem_*_o",
+    "retire_*_o",
+  ], max = 2.0, min = 0.2 },
+]
+input_transitions = [
+  { ports = [
+    "rst_n_i",
+    "imem_*_i",
+    "dmem_*_i",
+  ], rise = 0.10, fall = 0.10 },
+]
+output_loads = [
+  { ports = [
+    "imem_*_o",
+    "dmem_*_o",
+    "retire_*_o",
+  ], capacitance = 0.05 },
+]
+design_rules = { max_transition = 0.50, max_fanout = 16, max_capacitance = 0.20 }
 
-# [[constraints.clocks]]
-# name = "clk_i"
-# period = 10.0
-# waveform = [0.0, 5.0]
-# setup_uncertainty = 0.20
-# hold_uncertainty = 0.05
-# transition = 0.10
+[simulation]
+reset_cycles = 5
+max_cycles = 1000000
+ports = [
+  { name = "imem", protocol = "virt" },
+  { name = "dmem", protocol = "virt" },
+]
+devices = [
+  { name = "imem", type = "tcm", base = 0x00000000, size = 0x01000000, load_address = 0x00000000 },
+  { name = "dmem", type = "tcm", base = 0x80000000, size = 0x01000000 },
+  { name = "host_exit", type = "host_exit", base = 0x10000000, size = 4 },
+  { name = "console", type = "console", base = 0x10000004, size = 4 },
+]
 
-# [flow.lint.spyglass]
-
-# [flow.lint.verilator]
-
-# [flow.sim.verilator]
-# threads = 1
-# trace = false
-# options = ["-Wall", "-Wno-fatal"]
-
-# [simulation]
-# reset_cycles = 5
-# max_cycles = 1000000
-
-# [[simulation.ports]]
-# name = "imem"
-# protocol = "virt"
-
-# [[simulation.ports]]
-# name = "dmem"
-# protocol = "virt"
-
-# [[simulation.devices]]
-# name = "imem"
-# type = "tcm"
-# base = 0x00000000
-# size = 0x01000000
-# load_address = 0x00000000
-
-# [[simulation.devices]]
-# name = "dmem"
-# type = "tcm"
-# base = 0x80000000
-# size = 0x01000000
-
-# [[simulation.devices]]
-# name = "host_exit"
-# type = "host_exit"
-# base = 0x10000000
-# size = 0x00000004
-
-# [[simulation.devices]]
-# name = "console"
-# type = "console"
-# base = 0x10000004
-# size = 0x00000004
-
-# [flow.synth.dc]
+# Enable a synthesis backend after filling its technology libraries.
+# [technology.tsmc28]
+# targets = ["asic", "tsmc28"]
+# [technology.tsmc28.dc]
 # target_libraries = ["/absolute/path/to/slow.db"]
-# link_libraries = []
-# synthetic_libraries = []
-# library_pairs = [
-#   { max = "/absolute/path/to/slow.db", min = "/absolute/path/to/fast.db" },
-# ]
-# compile = "ultra"
+# library_pairs = [{ max = "/absolute/path/to/slow.db", min = "/absolute/path/to/fast.db" }]
+# [flow.synth.dc]
+# technologies = ["tsmc28"]
+# targets = ["synthesis"]
 # options = ["-64bit"]
+# script = "scripts/synth/dc.tcl"  # optional override
+# [flow.formal.formality]
+# technologies = ["tsmc28"]
+# requires = "synth.dc"
 
 [workflow]
-stages = []
+stages = ["lint", "sim"]

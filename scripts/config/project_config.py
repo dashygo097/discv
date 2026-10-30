@@ -1,41 +1,29 @@
-#!/usr/bin/env python3
-"""Validate Project.toml and generate build-system projections."""
+"""Golden project configuration and project-specific generated artifacts.
 
-import argparse
+HDL collection, target filtering and dependency resolution belong to Bender.
+"""
+
 import hashlib
 import json
 import math
 import os
 import re
-import shlex
-import sys
 import tempfile
 from pathlib import Path
 
 try:
     import tomllib
 except ImportError:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        sys.stderr.write(
-            "ERROR: TOML parser unavailable; install scripts/config/requirements.txt\n"
-        )
-        raise SystemExit(2)
+    import tomli as tomllib
 
-
-GENERATOR_VERSION = "0.12.0"
+GENERATOR_VERSION = "1.0.0"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 RISCV_MARCH = re.compile(
     r"^rv(?P<xlen>32|64)(?P<compact>[a-z0-9]+)"
     r"(?P<suffix>(?:_[a-z][a-z0-9]*)*)$"
 )
-RISCV_SINGLE_EXTENSION = re.compile(
-    r"(?P<name>[a-z])(?P<version>\d+(?:p\d+)?)?"
-)
-RISCV_MULTI_EXTENSION = re.compile(
-    r"^(?P<name>[a-z][a-z0-9]*?)(?:\d+(?:p\d+)?)?$"
-)
+RISCV_SINGLE_EXTENSION = re.compile(r"(?P<name>[a-z])(?P<version>\d+(?:p\d+)?)?")
+RISCV_MULTI_EXTENSION = re.compile(r"^(?P<name>[a-z][a-z0-9]*?)(?:\d+(?:p\d+)?)?$")
 ARCH_FEATURES = (
     "i",
     "e",
@@ -54,30 +42,6 @@ MICROARCHITECTURE_CAPABILITIES = {
         "xlen": 32,
         "extensions": frozenset({"i"}),
     },
-}
-RTL_SOURCE_SUFFIXES = {".sv", ".v"}
-RTL_HEADER_SUFFIXES = {".svh", ".vh", ".h"}
-GENERATED_RTL_NAMES = {"arch_pkg.sv"}
-MANAGED_OUTPUT_NAMES = {
-    ".done",
-    "arch_pkg.sv",
-    "cfg.svh",
-    "constraints.sdc",
-    "demu/generated/cfg.hh",
-    "demu/generated/devices.hh",
-    "demu/generated/platform.hh",
-    "demu/generated/demu_platform_pkg.sv",
-    "demu/generated/platform_pkg.sv",
-    "demu/generated/port_bindings.hh",
-    "demu/linker.ld",
-    "demu/start.S",
-    "manifest.json",
-    "project.env",
-    "project.mk",
-    "rtl.f",
-    "rtl.tcl",
-    "sim.cmake",
-    "synth.dc.tcl",
 }
 
 
@@ -118,9 +82,7 @@ def parse_riscv_march(march):
 
     base = single_extensions[0]
     if base not in {"i", "e", "g"}:
-        raise ConfigError(
-            'architecture.march: base ISA must be "i", "e", or "g"'
-        )
+        raise ConfigError('architecture.march: base ISA must be "i", "e", or "g"')
     if "g" in single_extensions[1:]:
         raise ConfigError('architecture.march: "g" is only valid as the base ISA')
 
@@ -140,9 +102,7 @@ def parse_riscv_march(march):
             )
         extension = extension_match.group("name")
         if extension in extensions:
-            raise ConfigError(
-                f"architecture.march: duplicate extension: {extension}"
-            )
+            raise ConfigError(f"architecture.march: duplicate extension: {extension}")
         extensions.add(extension)
 
     xlen = int(match.group("xlen"))
@@ -181,6 +141,8 @@ def validate_microarchitecture(top, xlen, extensions):
 
 
 def reject_unknown(table, allowed, location):
+    if not isinstance(table, dict):
+        raise ConfigError(f"{location}: expected a table")
     unknown = sorted(set(table) - set(allowed))
     if unknown:
         raise ConfigError(f"{location}: unknown key(s): {', '.join(unknown)}")
@@ -248,7 +210,9 @@ def configuration_path(project_root, value, location, suffix=None):
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{location}: expected a non-empty path string")
     if "$" in value:
-        raise ConfigError(f"{location}: environment-variable expansion is not supported")
+        raise ConfigError(
+            f"{location}: environment-variable expansion is not supported"
+        )
     path = Path(value)
     if path.is_absolute():
         normalized = Path(os.path.normpath(value))
@@ -257,194 +221,6 @@ def configuration_path(project_root, value, location, suffix=None):
     if suffix is not None and normalized.suffix.lower() != suffix:
         raise ConfigError(f"{location}: expected a {suffix} file: {value}")
     return str(normalized)
-
-
-def project_path(project_root, value, location):
-    project_root = project_root.resolve()
-    path = Path(value)
-    if path.is_absolute() or ".." in path.parts:
-        raise ConfigError(f"{location}: expected a path relative to the project root")
-    resolved = (project_root / path).resolve()
-    if os.path.commonpath([str(project_root), str(resolved)]) != str(project_root):
-        raise ConfigError(f"{location}: path resolves outside the project root")
-    return resolved
-
-
-def relative_project_path(project_root, path):
-    return path.resolve().relative_to(project_root.resolve()).as_posix()
-
-
-def absolute_project_path(project_root, path):
-    return str((project_root.resolve() / path).resolve())
-
-
-def validate_include_resolution(include_dirs, headers):
-    candidates = {}
-    for include_dir in include_dirs:
-        include_path = Path(include_dir)
-        for header in headers:
-            header_path = Path(header)
-            try:
-                include_name = header_path.relative_to(include_path).as_posix()
-            except ValueError:
-                continue
-            candidates.setdefault(include_name, set()).add(header)
-
-    ambiguities = {
-        include_name: sorted(paths)
-        for include_name, paths in candidates.items()
-        if len(paths) > 1
-    }
-    if ambiguities:
-        details = []
-        for include_name, paths in sorted(ambiguities.items()):
-            details.append(f'  "{include_name}" resolves to:')
-            details.extend(f"    {path}" for path in paths)
-        raise ConfigError("ambiguous RTL include resolution:\n" + "\n".join(details))
-
-
-def discover_rtl_filesets(rtl, project_root):
-    filesets = rtl.get("filesets")
-    if not isinstance(filesets, list) or not filesets:
-        raise ConfigError("rtl.filesets: expected a non-empty array of tables")
-
-    normalized_filesets = []
-    names = set()
-    source_owners = {}
-    sources = []
-    include_dirs = []
-    include_dir_set = set()
-    headers = []
-    header_set = set()
-    discovery_dirs = []
-    discovery_dir_set = set()
-
-    for index, fileset in enumerate(filesets):
-        location = f"rtl.filesets[{index}]"
-        if not isinstance(fileset, dict):
-            raise ConfigError(f"{location}: expected a table")
-        reject_unknown(fileset, {"name", "roots", "patterns"}, location)
-        name = require_string(fileset, "name", location)
-        if not IDENTIFIER.match(name):
-            raise ConfigError(f"{location}.name: expected an identifier")
-        if name in names:
-            raise ConfigError(f"{location}.name: duplicate fileset name: {name}")
-        names.add(name)
-
-        root_names = string_list(fileset.get("roots"), f"{location}.roots")
-        patterns = string_list(fileset.get("patterns"), f"{location}.patterns")
-        if not root_names:
-            raise ConfigError(f"{location}.roots: expected at least one root")
-        if not patterns:
-            raise ConfigError(f"{location}.patterns: expected at least one pattern")
-
-        roots = []
-        for root_index, root_name in enumerate(root_names):
-            root_location = f"{location}.roots[{root_index}]"
-            root = project_path(project_root, root_name, root_location)
-            if not root.is_dir():
-                raise ConfigError(f"{root_location}: directory does not exist: {root}")
-            roots.append(root)
-
-            for directory in [root] + sorted(
-                (path for path in root.rglob("*") if path.is_dir()),
-                key=lambda path: path.as_posix(),
-            ):
-                directory_name = relative_project_path(project_root, directory)
-                if directory_name not in discovery_dir_set:
-                    discovery_dir_set.add(directory_name)
-                    discovery_dirs.append(directory_name)
-
-            header_paths = sorted(
-                (
-                    path.resolve()
-                    for path in root.rglob("*")
-                    if path.is_file() and path.suffix.lower() in RTL_HEADER_SUFFIXES
-                ),
-                key=lambda path: path.as_posix(),
-            )
-            candidate_include_dirs = [root] + [path.parent for path in header_paths]
-            for directory in candidate_include_dirs:
-                directory_name = relative_project_path(project_root, directory)
-                if directory_name not in include_dir_set:
-                    include_dir_set.add(directory_name)
-                    include_dirs.append(directory_name)
-            for header_path in header_paths:
-                header_name = relative_project_path(project_root, header_path)
-                if header_name not in header_set:
-                    header_set.add(header_name)
-                    headers.append(header_name)
-
-        normalized_patterns = []
-        for pattern_index, pattern in enumerate(patterns):
-            pattern_location = f"{location}.patterns[{pattern_index}]"
-            pattern_path = Path(pattern)
-            if not pattern or pattern_path.is_absolute() or ".." in pattern_path.parts:
-                raise ConfigError(
-                    f"{pattern_location}: expected a non-empty relative glob pattern"
-                )
-            normalized_patterns.append(pattern)
-
-        fileset_sources = []
-        for root in roots:
-            for pattern_index, pattern in enumerate(normalized_patterns):
-                pattern_location = f"{location}.patterns[{pattern_index}]"
-                try:
-                    matches = sorted(
-                        (
-                            path.resolve()
-                            for path in root.glob(pattern)
-                            if path.is_file()
-                        ),
-                        key=lambda path: path.as_posix(),
-                    )
-                except ValueError as error:
-                    raise ConfigError(f"{pattern_location}: invalid glob: {error}")
-                for source in matches:
-                    if source.suffix.lower() not in RTL_SOURCE_SUFFIXES:
-                        raise ConfigError(
-                            f"{pattern_location}: matched unsupported RTL file: {source}"
-                        )
-                    source_name = relative_project_path(project_root, source)
-                    previous_owner = source_owners.get(source_name)
-                    if previous_owner is not None:
-                        raise ConfigError(
-                            f"{source_name}: selected more than once; first selected "
-                            f"by fileset {previous_owner}, then by fileset {name}"
-                        )
-                    source_owners[source_name] = name
-                    sources.append(source_name)
-                    fileset_sources.append(source_name)
-
-        normalized_filesets.append(
-            {
-                "name": name,
-                "roots": [relative_project_path(project_root, root) for root in roots],
-                "patterns": normalized_patterns,
-                "sources": fileset_sources,
-            }
-        )
-
-    if not sources:
-        raise ConfigError("rtl.filesets: no RTL sources matched")
-    generated_conflicts = sorted(
-        source
-        for source in sources
-        if Path(source).name.casefold() in GENERATED_RTL_NAMES
-    )
-    if generated_conflicts:
-        raise ConfigError(
-            "RTL source conflicts with generated architecture package: "
-            + ", ".join(generated_conflicts)
-        )
-    validate_include_resolution(include_dirs, headers)
-    return {
-        "filesets": normalized_filesets,
-        "sources": sources,
-        "include_dirs": include_dirs,
-        "headers": headers,
-        "discovery_dirs": discovery_dirs,
-    }
 
 
 def normalize_clock(clock, location, *, virtual):
@@ -474,9 +250,7 @@ def normalize_clock(clock, location, *, virtual):
         for index, value in enumerate(waveform)
     ]
     if not 0 <= waveform[0] < waveform[1] <= period:
-        raise ConfigError(
-            f"{location}.waveform: expected 0 <= rise < fall <= period"
-        )
+        raise ConfigError(f"{location}.waveform: expected 0 <= rise < fall <= period")
     normalized = {
         "name": name,
         "period": period,
@@ -509,9 +283,7 @@ def normalize_port_constraints(entries, location, clock_names, value_keys):
         if "clock" in value_keys:
             clock = require_string(entry, "clock", entry_location)
             if clock not in clock_names:
-                raise ConfigError(
-                    f"{entry_location}.clock: undefined clock: {clock}"
-                )
+                raise ConfigError(f"{entry_location}.clock: undefined clock: {clock}")
             item["clock"] = clock
         value_count = 0
         for key in value_keys:
@@ -523,9 +295,7 @@ def normalize_port_constraints(entries, location, clock_names, value_keys):
                 value_count += 1
         if value_count == 0:
             names = ", ".join(key for key in value_keys if key != "clock")
-            raise ConfigError(
-                f"{entry_location}: expected at least one of: {names}"
-            )
+            raise ConfigError(f"{entry_location}: expected at least one of: {names}")
         normalized.append(item)
     return normalized
 
@@ -606,108 +376,6 @@ def normalize_constraints(raw):
     }
 
 
-def normalize_dc_synthesis(dc, project_root):
-    location = "flow.synth.dc"
-    if not isinstance(dc, dict):
-        raise ConfigError(f"{location}: expected a table")
-    reject_unknown(
-        dc,
-        {
-            "target_libraries",
-            "link_libraries",
-            "synthetic_libraries",
-            "library_pairs",
-            "compile",
-            "options",
-        },
-        location,
-    )
-
-    def libraries(key, suffix):
-        values = string_list(dc.get(key, []), f"{location}.{key}")
-        return [
-            configuration_path(
-                project_root, value, f"{location}.{key}[{index}]", suffix
-            )
-            for index, value in enumerate(values)
-        ]
-
-    target_libraries = libraries("target_libraries", ".db")
-    if not target_libraries:
-        raise ConfigError(f"{location}.target_libraries: expected at least one library")
-    link_libraries = libraries("link_libraries", ".db")
-    synthetic_libraries = libraries("synthetic_libraries", ".sldb")
-
-    compile_mode = dc.get("compile", "ultra")
-    if compile_mode not in {"standard", "ultra"}:
-        raise ConfigError(f'{location}.compile: expected "standard" or "ultra"')
-
-    library_pairs = dc.get("library_pairs", [])
-    if not isinstance(library_pairs, list):
-        raise ConfigError(f"{location}.library_pairs: expected an array of tables")
-    normalized_pairs = []
-    known_max_libraries = set(target_libraries + link_libraries)
-    for index, pair in enumerate(library_pairs):
-        pair_location = f"{location}.library_pairs[{index}]"
-        if not isinstance(pair, dict):
-            raise ConfigError(f"{pair_location}: expected a table")
-        reject_unknown(pair, {"max", "min"}, pair_location)
-        maximum = configuration_path(
-            project_root,
-            require_string(pair, "max", pair_location),
-            f"{pair_location}.max",
-            ".db",
-        )
-        minimum = configuration_path(
-            project_root,
-            require_string(pair, "min", pair_location),
-            f"{pair_location}.min",
-            ".db",
-        )
-        if maximum not in known_max_libraries:
-            raise ConfigError(
-                f"{pair_location}.max: expected a target or link library"
-            )
-        normalized_pairs.append({"max": maximum, "min": minimum})
-
-    return {
-        "target_libraries": target_libraries,
-        "link_libraries": link_libraries,
-        "synthetic_libraries": synthetic_libraries,
-        "library_pairs": normalized_pairs,
-        "compile": compile_mode,
-        "options": string_list(dc.get("options", []), f"{location}.options"),
-    }
-
-
-def normalize_verilator_simulation(verilator):
-    location = "flow.sim.verilator"
-    if not isinstance(verilator, dict):
-        raise ConfigError(f"{location}: expected a table")
-    reject_unknown(
-        verilator,
-        {
-            "threads",
-            "trace",
-            "options",
-        },
-        location,
-    )
-    return {
-        "threads": unsigned_integer(
-            verilator.get("threads", 1),
-            f"{location}.threads",
-            positive=True,
-        ),
-        "trace": require_bool(verilator, "trace", location)
-        if "trace" in verilator
-        else False,
-        "options": string_list(
-            verilator.get("options", []), f"{location}.options"
-        ),
-    }
-
-
 def normalize_simulation(raw, architecture, *, required):
     simulation = raw.get("simulation", {})
     if not isinstance(simulation, dict):
@@ -776,9 +444,7 @@ def normalize_simulation(raw, architecture, *, required):
                 f'{location}.type: expected "tcm", "console", or "host_exit"'
             )
         base = unsigned_integer(device.get("base"), f"{location}.base")
-        size = unsigned_integer(
-            device.get("size"), f"{location}.size", positive=True
-        )
+        size = unsigned_integer(device.get("size"), f"{location}.size", positive=True)
         if base + size > 0x100000000:
             raise ConfigError(f"{location}: device range exceeds 32-bit address space")
 
@@ -826,9 +492,7 @@ def normalize_simulation(raw, architecture, *, required):
     if required and (
         isinstance(reset_vector, bool) or not isinstance(reset_vector, int)
     ):
-        raise ConfigError(
-            "simulation: architecture.reset_vector must be an integer"
-        )
+        raise ConfigError("simulation: architecture.reset_vector must be an integer")
     if required:
         port_names = {port["name"] for port in normalized_ports}
         for name in ("imem", "dmem"):
@@ -836,9 +500,7 @@ def normalize_simulation(raw, architecture, *, required):
                 raise ConfigError(
                     f'simulation.ports: required virtual port is missing: "{name}"'
                 )
-        devices_by_name = {
-            device["name"]: device for device in normalized_devices
-        }
+        devices_by_name = {device["name"]: device for device in normalized_devices}
         for name in ("imem", "dmem"):
             device = devices_by_name.get(name)
             if device is None or device["type"] != "tcm":
@@ -858,9 +520,7 @@ def normalize_simulation(raw, architecture, *, required):
             )
 
         host_exit_devices = [
-            device
-            for device in normalized_devices
-            if device["type"] == "host_exit"
+            device for device in normalized_devices if device["type"] == "host_exit"
         ]
         if len(host_exit_devices) != 1:
             raise ConfigError(
@@ -887,197 +547,190 @@ def normalize_simulation(raw, architecture, *, required):
 def load_config(config_path, project_root):
     with config_path.open("rb") as stream:
         raw = tomllib.load(stream)
-
     reject_unknown(
         raw,
         {
             "schema_version",
             "architecture",
-            "rtl",
+            "bender",
             "build",
             "environment",
             "constraints",
+            "technology",
             "flow",
             "simulation",
             "workflow",
         },
         "<root>",
     )
-    if raw.get("schema_version") != 5:
-        raise ConfigError("schema_version: expected integer 5")
-
+    if raw.get("schema_version") != 6:
+        raise ConfigError("schema_version: expected 6; use the native [bender] schema")
     architecture = require_table(raw, "architecture")
-    reject_unknown(
-        architecture,
-        {"march", "top", "reset_vector"},
-        "architecture",
-    )
+    reject_unknown(architecture, {"march", "top", "reset_vector"}, "architecture")
     march = require_string(architecture, "march", "architecture")
     xlen, extensions = parse_riscv_march(march)
     top = require_string(architecture, "top", "architecture")
     if not IDENTIFIER.fullmatch(top):
-        raise ConfigError("architecture.top: invalid SystemVerilog identifier")
+        raise ConfigError("architecture.top: invalid identifier")
     validate_microarchitecture(top, xlen, extensions)
-    reset_vector = unsigned_integer(
-        architecture.get("reset_vector"),
-        "architecture.reset_vector",
-        maximum=(1 << xlen) - 1,
+    architecture = dict(
+        architecture,
+        xlen=xlen,
+        extensions=sorted(extensions),
+        features={feature: feature in extensions for feature in ARCH_FEATURES},
+        reset_vector=unsigned_integer(
+            architecture.get("reset_vector"),
+            "architecture.reset_vector",
+            maximum=(1 << xlen) - 1,
+        ),
     )
-    normalized_architecture = {
-        "march": march,
-        "top": top,
-        "reset_vector": reset_vector,
-        "xlen": xlen,
-        "extensions": sorted(extensions),
-        "features": {
-            feature: feature in extensions for feature in ARCH_FEATURES
-        },
-    }
-
-    rtl = require_table(raw, "rtl")
-    reject_unknown(rtl, {"filesets"}, "rtl")
-    discovered_rtl = discover_rtl_filesets(rtl, project_root)
-
+    bender = require_table(raw, "bender")
+    reject_unknown(
+        bender,
+        {"name", "version", "sources", "dependencies", "export_include_dirs"},
+        "bender",
+    )
+    require_string(bender, "name", "bender")
+    require_string(bender, "version", "bender")
+    if not isinstance(bender.get("sources"), list) or not bender["sources"]:
+        raise ConfigError(
+            "bender.sources: expected non-empty native Bender source groups"
+        )
+    if not isinstance(bender.get("dependencies", {}), dict):
+        raise ConfigError("bender.dependencies: expected a table")
     build = require_table(raw, "build")
-    reject_unknown(build, {"jobs"}, "build")
-    jobs = build.get("jobs")
-    if isinstance(jobs, bool) or not isinstance(jobs, int) or jobs < 1:
-        raise ConfigError("build.jobs: expected a positive integer")
-
-    environment = require_table(raw, "environment")
+    reject_unknown(build, {"jobs", "technology", "reproducible"}, "build")
+    build = {
+        "jobs": unsigned_integer(build.get("jobs"), "build.jobs", positive=True),
+        "technology": require_string(build, "technology", "build"),
+        "reproducible": require_bool(build, "reproducible", "build")
+        if "reproducible" in build
+        else False,
+    }
+    environment = raw.get("environment", {})
     reject_unknown(
         environment,
-        {"required_commands", "required_variables"},
+        {"required_commands", "required_variables", "tool_versions", "packages"},
         "environment",
     )
-    required_commands = string_list(
-        environment.get("required_commands", []), "environment.required_commands"
-    )
-    required_variables = string_list(
-        environment.get("required_variables", []), "environment.required_variables"
-    )
-    for variable in required_variables:
-        if not IDENTIFIER.match(variable):
-            raise ConfigError(
-                f"environment.required_variables: invalid variable name: {variable}"
-            )
+    environment = {
+        **{
+            key: string_list(environment.get(key, []), "environment." + key)
+            for key in ("required_commands", "required_variables")
+        },
+        "tool_versions": environment.get("tool_versions", {}),
+        "packages": environment.get("packages", {}),
+    }
+    for key in ("tool_versions", "packages"):
+        if not isinstance(environment[key], dict) or any(
+            not isinstance(value, str) or not value
+            for value in environment[key].values()
+        ):
+            raise ConfigError("environment." + key + ": expected version strings")
+    technologies = require_table(raw, "technology")
+    for name, tech in technologies.items():
+        if not IDENTIFIER.fullmatch(name) or not isinstance(tech, dict):
+            raise ConfigError("technology: expected named technology tables")
+        tech.setdefault("targets", [])
+        string_list(tech["targets"], "technology." + name + ".targets")
+        if not isinstance(tech.get("assets", {}), dict):
+            raise ConfigError("technology." + name + ".assets: expected a table")
+        for asset, desc in tech.get("assets", {}).items():
+            if not isinstance(desc, dict):
+                raise ConfigError(
+                    "technology assets require {path, sha256} descriptors"
+                )
+            reject_unknown(desc, {"path", "sha256"}, "technology asset " + asset)
+            desc["path"] = configuration_path(project_root, desc.get("path"), asset)
+            if "sha256" in desc and not re.fullmatch(r"[0-9a-f]{64}", desc["sha256"]):
+                raise ConfigError("invalid asset SHA256: " + asset)
+    if build["technology"] not in technologies:
+        raise ConfigError("build.technology: unknown technology")
+    from backends import load_backend
 
     flow = raw.get("flow", {})
-    if not isinstance(flow, dict):
-        raise ConfigError("flow: expected a table")
-    reject_unknown(flow, {"lint", "synth", "sim"}, "flow")
-    lint = flow.get("lint", {})
-    if not isinstance(lint, dict):
-        raise ConfigError("flow.lint: expected a table")
-    supported_lint_tools = {"spyglass", "verilator"}
-    reject_unknown(lint, supported_lint_tools, "flow.lint")
-    normalized_lint = {}
-    for tool in sorted(lint):
-        tool_config = lint[tool]
-        location = f"flow.lint.{tool}"
-        if not isinstance(tool_config, dict):
-            raise ConfigError(f"{location}: expected a table")
-        reject_unknown(tool_config, {"options"}, location)
-        normalized_lint[tool] = {
-            "options": string_list(
-                tool_config.get("options", []), f"{location}.options"
+    reject_unknown(flow, {"lint", "synth", "formal", "sim"}, "flow")
+    normalized_flow = {}
+    for stage, tools in flow.items():
+        if not isinstance(tools, dict):
+            raise ConfigError("flow." + stage + ": expected a table")
+        normalized_flow[stage] = {}
+        for tool, settings in tools.items():
+            if not IDENTIFIER.fullmatch(tool) or not isinstance(settings, dict):
+                raise ConfigError("flow entries must be named backend tables")
+            settings = load_backend(project_root, stage, tool, settings)
+            settings["technologies"] = string_list(
+                settings.get("technologies", [build["technology"]]), "technologies"
             )
-        }
+            if not settings["technologies"] or len(
+                set(settings["technologies"])
+            ) != len(settings["technologies"]):
+                raise ConfigError("technologies: expected distinct technology names")
+            for technology in settings["technologies"]:
+                if technology not in technologies:
+                    raise ConfigError("unknown technology: " + technology)
+            normalized_flow[stage][tool] = settings
+    for stage in ("lint", "synth", "formal", "sim"):
+        normalized_flow.setdefault(stage, {})
+    for tools in normalized_flow.values():
+        for settings in tools.values():
+            provider = settings.get("requires")
+            if provider:
+                try:
+                    stage, backend = provider.split(".")
+                    prerequisite = normalized_flow[stage][backend]
+                except (ValueError, KeyError):
+                    raise ConfigError("Unknown prerequisite flow: " + str(provider))
+                if not set(settings["technologies"]) <= set(
+                    prerequisite["technologies"]
+                ):
+                    raise ConfigError("Dependent flows require matching technologies")
+    visiting, visited = set(), set()
 
-    synth = flow.get("synth", {})
-    if not isinstance(synth, dict):
-        raise ConfigError("flow.synth: expected a table")
-    supported_synth_tools = {"dc"}
-    reject_unknown(synth, supported_synth_tools, "flow.synth")
-    normalized_synth = {}
-    if "dc" in synth:
-        normalized_synth["dc"] = normalize_dc_synthesis(synth["dc"], project_root)
+    def visit(reference):
+        if reference in visiting:
+            raise ConfigError("Cyclic flow dependency: " + reference)
+        if reference in visited:
+            return
+        visiting.add(reference)
+        stage, backend = reference.split(".")
+        prerequisite = normalized_flow[stage][backend].get("requires")
+        if prerequisite:
+            visit(prerequisite)
+        visiting.remove(reference)
+        visited.add(reference)
 
-    sim = flow.get("sim", {})
-    if not isinstance(sim, dict):
-        raise ConfigError("flow.sim: expected a table")
-    supported_sim_tools = {"verilator"}
-    reject_unknown(sim, supported_sim_tools, "flow.sim")
-    normalized_sim = {}
-    if "verilator" in sim:
-        normalized_sim["verilator"] = normalize_verilator_simulation(
-            sim["verilator"]
-        )
-
-    simulation = normalize_simulation(
-        raw, normalized_architecture, required=bool(normalized_sim)
-    )
-
-    constraints = normalize_constraints(raw)
-
+    for stage, tools in normalized_flow.items():
+        for backend in tools:
+            visit(stage + "." + backend)
     workflow = require_table(raw, "workflow")
     reject_unknown(workflow, {"stages"}, "workflow")
     stages = string_list(workflow.get("stages", []), "workflow.stages")
-    unsupported = sorted(set(stages) - {"lint", "synth", "sim"})
-    if unsupported:
-        raise ConfigError(
-            f"workflow.stages: unsupported stage(s): {', '.join(unsupported)}"
-        )
-    if "lint" in stages and not normalized_lint:
-        raise ConfigError(
-            "workflow.stages: lint is listed but no flow.lint.<tool> table exists"
-        )
-    if "synth" in stages and not normalized_synth:
-        raise ConfigError(
-            "workflow.stages: synth is listed but no flow.synth.<tool> table exists"
-        )
-    if "sim" in stages and not normalized_sim:
-        raise ConfigError(
-            "workflow.stages: sim is listed but no flow.sim.<tool> table exists"
-        )
     if len(stages) != len(set(stages)):
-        raise ConfigError("workflow.stages: duplicate stages are not allowed")
-
+        raise ConfigError("workflow.stages: duplicate stages")
+    for stage in stages:
+        if stage not in normalized_flow or not normalized_flow[stage]:
+            raise ConfigError("workflow stage has no configured backend: " + stage)
     return {
-        "schema_version": 5,
-        "architecture": normalized_architecture,
-        "rtl": discovered_rtl,
-        "build": {"jobs": jobs},
-        "environment": {
-            "required_commands": required_commands,
-            "required_variables": required_variables,
-        },
-        "constraints": constraints,
-        "flow": {
-            "lint": normalized_lint,
-            "synth": normalized_synth,
-            "sim": normalized_sim,
-        },
-        "simulation": simulation,
+        "schema_version": 6,
+        "architecture": architecture,
+        "bender": bender,
+        "build": build,
+        "environment": environment,
+        "technology": technologies,
+        "flow": normalized_flow,
+        "constraints": normalize_constraints(raw),
+        "simulation": normalize_simulation(
+            raw, architecture, required=bool(normalized_flow["sim"])
+        ),
         "workflow": {"stages": stages},
     }
 
 
-def resolved_configuration(config):
-    rtl = {
-        key: value for key, value in config["rtl"].items() if key != "discovery_dirs"
-    }
-    return {
-        "schema_version": config["schema_version"],
-        "architecture": config["architecture"],
-        "rtl": rtl,
-        "build": config["build"],
-        "environment": config["environment"],
-        "constraints": config["constraints"],
-        "flow": config["flow"],
-        "simulation": config["simulation"],
-        "workflow": config["workflow"],
-    }
-
-
 def config_digest(config):
-    encoded = json.dumps(
-        resolved_configuration(config),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def header(comment, digest):
@@ -1085,20 +738,6 @@ def header(comment, digest):
         f"{comment} Generated by project_config.py; do not edit.\n"
         f"{comment} Configuration digest: {digest}\n"
     )
-
-
-def render_filelist(config, digest, project_root, output_dir):
-    lines = [header("#", digest).rstrip()]
-    lines.append(f"+incdir+{output_dir}")
-    lines.extend(
-        f"+incdir+{absolute_project_path(project_root, path)}"
-        for path in config["rtl"]["include_dirs"]
-    )
-    lines.append(str(output_dir / "arch_pkg.sv"))
-    lines.extend(
-        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
-    )
-    return "\n".join(lines) + "\n"
 
 
 def render_arch_package(config, digest):
@@ -1132,7 +771,9 @@ def render_arch_package(config, digest):
 def tcl_braced(value):
     value = str(value)
     if "{" in value or "}" in value or "\n" in value or "\r" in value:
-        raise ConfigError(f"value cannot be represented safely in generated Tcl: {value!r}")
+        raise ConfigError(
+            f"value cannot be represented safely in generated Tcl: {value!r}"
+        )
     return "{" + value + "}"
 
 
@@ -1142,24 +783,6 @@ def tcl_list(values):
 
 def format_number(value):
     return format(value, ".15g")
-
-
-def render_rtl_tcl(config, digest, project_root, output_dir):
-    sources = [str(output_dir / "arch_pkg.sv")] + [
-        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
-    ]
-    include_dirs = [str(output_dir)] + [
-        absolute_project_path(project_root, path)
-        for path in config["rtl"]["include_dirs"]
-    ]
-    return "".join(
-        [
-            header("#", digest),
-            f"set RTL_TOP {tcl_braced(config['architecture']['top'])}\n",
-            f"set RTL_SOURCES {tcl_list(sources)}\n",
-            f"set RTL_INCLUDE_DIRS {tcl_list(include_dirs)}\n",
-        ]
-    )
 
 
 def render_constraints_sdc(config, digest):
@@ -1269,24 +892,6 @@ def render_constraints_sdc(config, digest):
     return "\n".join(lines) + "\n"
 
 
-def render_dc_tcl(config, digest):
-    dc = config["flow"]["synth"]["dc"]
-    pairs = [
-        f"[list {tcl_braced(pair['max'])} {tcl_braced(pair['min'])}]"
-        for pair in dc["library_pairs"]
-    ]
-    return "".join(
-        [
-            header("#", digest),
-            f"set SYNTH_TARGET_LIBRARIES {tcl_list(dc['target_libraries'])}\n",
-            f"set SYNTH_LINK_LIBRARIES {tcl_list(dc['link_libraries'])}\n",
-            f"set SYNTH_SYNTHETIC_LIBRARIES {tcl_list(dc['synthetic_libraries'])}\n",
-            "set SYNTH_MIN_LIBRARY_PAIRS [list " + " ".join(pairs) + "]\n",
-            f"set SYNTH_COMPILE {tcl_braced(dc['compile'])}\n",
-        ]
-    )
-
-
 def cmake_quote(value):
     value = str(value)
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -1335,10 +940,7 @@ def render_demu_platform(config, digest):
     port_entries = []
     for port in ports:
         port_entries.append(
-            "    PortDescriptor{"
-            f"{cpp_string(port['name'])}, "
-            "hal::BusProtocol::Virt"
-            "}"
+            f"    PortDescriptor{{{cpp_string(port['name'])}, hal::BusProtocol::Virt}}"
         )
     device_entries = []
     for device in devices:
@@ -1361,8 +963,7 @@ def render_demu_platform(config, digest):
             "\nnamespace demu::generated {\n\n",
             "using hal::DeviceDescriptor;\n\n",
             "using hal::PortDescriptor;\n\n",
-            f"inline constexpr std::array<PortDescriptor, {len(ports)}> "
-            "PORTS{{\n",
+            f"inline constexpr std::array<PortDescriptor, {len(ports)}> PORTS{{{{\n",
             ",\n".join(port_entries),
             "\n}};\n\n",
             f"inline constexpr std::array<DeviceDescriptor, {len(devices)}> DEVICES{{{{\n",
@@ -1391,9 +992,7 @@ def render_demu_platform_package(config, digest):
 
 
 def render_demu_linker(config, digest):
-    devices = {
-        device["name"]: device for device in config["simulation"]["devices"]
-    }
+    devices = {device["name"]: device for device in config["simulation"]["devices"]}
     imem = devices["imem"]
     dmem = devices["dmem"]
     imem_origin = imem["load_address"]
@@ -1449,7 +1048,7 @@ def render_demu_linker(config, digest):
             "  __heap_start = .;\n",
             "  __stack_top = (ORIGIN(DMEM) + LENGTH(DMEM)) & ~15;\n",
             "  __heap_end = __stack_top;\n",
-            "  ASSERT(__heap_start <= __stack_top, \"DMEM overflow\")\n\n",
+            '  ASSERT(__heap_start <= __stack_top, "DMEM overflow")\n\n',
             "  /DISCARD/ :\n",
             "  {\n",
             "    *(.comment)\n",
@@ -1469,7 +1068,7 @@ def render_demu_start(config, digest):
     return "".join(
         [
             header("//", digest),
-            ".section .text.start, \"ax\", @progbits\n",
+            '.section .text.start, "ax", @progbits\n',
             ".align 2\n",
             ".globl _start\n",
             ".type _start, @function\n\n",
@@ -1508,220 +1107,14 @@ def render_demu_start(config, digest):
     )
 
 
-def render_sim_cmake(config, digest, project_root, output_dir):
-    verilator = config["flow"]["sim"]["verilator"]
-    simulation = config["simulation"]
-    sim_top = "demu_sim_top"
-    sources = [
-        str((output_dir / "arch_pkg.sv").resolve()),
-        str((output_dir / "demu/generated/demu_platform_pkg.sv").resolve()),
-    ] + [
-        absolute_project_path(project_root, path) for path in config["rtl"]["sources"]
-    ]
-    include_dirs = [str(output_dir)] + [
-        absolute_project_path(project_root, path)
-        for path in config["rtl"]["include_dirs"]
-    ]
-    trace = "ON" if verilator["trace"] else "OFF"
-
-    def cmake_list(name, values):
-        body = "\n".join(f"  {cmake_quote(value)}" for value in values)
-        return f"set({name}\n{body}\n)\n"
-
-    return "".join(
-        [
-            header("#", digest),
-            f"set(SIM_PROJECT_ROOT {cmake_quote(project_root)})\n",
-            f"set(SIM_TOP {cmake_quote(sim_top)})\n",
-            f"set(SIM_RTL_TOP {cmake_quote(config['architecture']['top'])})\n",
-            f"set(SIM_RESET_CYCLES {simulation['reset_cycles']})\n",
-            f"set(SIM_MAX_CYCLES {simulation['max_cycles']})\n",
-            f"set(SIM_THREADS {verilator['threads']})\n",
-            f"set(SIM_TRACE {trace})\n",
-            f"set(SIM_DEVICE_COUNT {len(simulation['devices'])})\n",
-            *[
-                "".join(
-                    [
-                        f"set(SIM_DEVICE_{index}_NAME {cmake_quote(device['name'])})\n",
-                        f"set(SIM_DEVICE_{index}_TYPE {cmake_quote(device['type'])})\n",
-                        f"set(SIM_DEVICE_{index}_BASE {device['base']})\n",
-                        f"set(SIM_DEVICE_{index}_SIZE {device['size']})\n",
-                        f"set(SIM_DEVICE_{index}_LOAD_ADDRESS "
-                        f"{device.get('load_address', -1)})\n",
-                    ]
-                )
-                for index, device in enumerate(simulation["devices"])
-            ],
-            cmake_list("SIM_RTL_SOURCES", sources),
-            cmake_list("SIM_RTL_INCLUDE_DIRS", include_dirs),
-            cmake_list("SIM_VERILATOR_OPTIONS", verilator["options"]),
-        ]
-    )
-
-
-def make_escape(value):
-    return value.replace("$", "$$").replace("#", "\\#")
-
-
-def make_project_path(path):
-    return f"$(PROJECT_ROOT)/{make_escape(path)}"
-
-
-def render_makefile(config, digest, project_root):
-    project_top = make_escape(config["architecture"]["top"])
-    lint_tools = " ".join(make_escape(tool) for tool in config["flow"]["lint"])
-    synth_tools = " ".join(make_escape(tool) for tool in config["flow"]["synth"])
-    sim_tools = " ".join(make_escape(tool) for tool in config["flow"]["sim"])
-    workflow_stages = " ".join(config["workflow"]["stages"])
-    rtl_sources = " ".join(make_project_path(path) for path in config["rtl"]["sources"])
-    rtl_headers = " ".join(make_project_path(path) for path in config["rtl"]["headers"])
-    rtl_discovery_dirs = " ".join(
-        make_project_path(path) for path in config["rtl"]["discovery_dirs"]
-    )
-    return "".join(
-        [
-            header("#", digest),
-            f"GENERATED_PROJECT_ROOT := {make_escape(str(project_root))}\n",
-            f"PROJECT_TOP := {project_top}\n",
-            f"BUILD_JOBS := {config['build']['jobs']}\n",
-            f"LINT_TOOLS := {lint_tools}\n",
-            f"SYNTH_TOOLS := {synth_tools}\n",
-            f"SIM_TOOLS := {sim_tools}\n",
-            f"WORKFLOW_STAGES := {workflow_stages}\n",
-            f"RTL_SOURCES := {rtl_sources}\n",
-            f"RTL_HEADERS := {rtl_headers}\n",
-            f"RTL_DISCOVERY_DIRS := {rtl_discovery_dirs}\n",
-            f"PROJECT_CONFIG_DIGEST := {digest}\n",
-        ]
-    )
-
-
-def shell_array(name, values):
-    joined_values = " ".join(shlex.quote(str(value)) for value in values)
-    return f"{name}=({joined_values})\n"
-
-
-def render_environment(config, digest):
-    rtl_top = shlex.quote(config["architecture"]["top"])
-    lint = config["flow"]["lint"]
-    synth = config["flow"]["synth"]
-    sim = config["flow"]["sim"]
-    simulation = config["simulation"]
-    lines = [
-        header("#", digest),
-        f"PROJECT_CONFIG_DIGEST={shlex.quote(digest)}\n",
-        f"RTL_TOP={rtl_top}\n",
-        f"BUILD_JOBS={config['build']['jobs']}\n",
-        f"LINT_TOOL_COUNT={len(lint)}\n",
-        shell_array("LINT_TOOLS", lint),
-    ]
-    for tool, tool_config in lint.items():
-        variable_prefix = f"LINT_{tool.upper()}"
-        lines.extend(
-            [
-                f"{variable_prefix}_OPTION_COUNT={len(tool_config['options'])}\n",
-                shell_array(f"{variable_prefix}_OPTIONS", tool_config["options"]),
-            ]
-        )
-    lines.extend(
-        [
-            f"SYNTH_TOOL_COUNT={len(synth)}\n",
-            shell_array("SYNTH_TOOLS", synth),
-        ]
-    )
-    if "dc" in synth:
-        dc = synth["dc"]
-        lines.extend(
-            [
-                f"SYNTH_DC_OPTION_COUNT={len(dc['options'])}\n",
-                shell_array("SYNTH_DC_OPTIONS", dc["options"]),
-            ]
-        )
-    lines.extend(
-        [
-            f"SIM_TOOL_COUNT={len(sim)}\n",
-            shell_array("SIM_TOOLS", sim),
-        ]
-    )
-    if "verilator" in sim:
-        verilator = sim["verilator"]
-        lines.extend(
-            [
-                f"SIM_RESET_CYCLES={simulation['reset_cycles']}\n",
-                f"SIM_MAX_CYCLES={simulation['max_cycles']}\n",
-                f"SIM_TRACE={'true' if verilator['trace'] else 'false'}\n",
-                f"SIM_DEVICE_COUNT={len(simulation['devices'])}\n",
-                shell_array(
-                    "SIM_DEVICE_NAMES",
-                    [device["name"] for device in simulation["devices"]],
-                ),
-                shell_array(
-                    "SIM_DEVICE_TYPES",
-                    [device["type"] for device in simulation["devices"]],
-                ),
-                shell_array(
-                    "SIM_DEVICE_BASES",
-                    [device["base"] for device in simulation["devices"]],
-                ),
-                shell_array(
-                    "SIM_DEVICE_SIZES",
-                    [device["size"] for device in simulation["devices"]],
-                ),
-                shell_array(
-                    "SIM_DEVICE_LOAD_ADDRESSES",
-                    [device.get("load_address", -1) for device in simulation["devices"]],
-                ),
-            ]
-        )
-    lines.extend(
-        [
-            shell_array(
-                "PROJECT_REQUIRED_COMMANDS", config["environment"]["required_commands"]
-            ),
-            shell_array(
-                "PROJECT_REQUIRED_VARIABLES",
-                config["environment"]["required_variables"],
-            ),
-            f"WORKFLOW_STAGE_COUNT={len(config['workflow']['stages'])}\n",
-            shell_array("WORKFLOW_STAGES", config["workflow"]["stages"]),
-        ]
-    )
-    return "".join(lines)
-
-
 def render_outputs(config, config_path, project_root, output_dir):
     digest = config_digest(config)
-    resolved = resolved_configuration(config)
-    outputs = {
-        "project.mk": render_makefile(config, digest, project_root),
-        "project.env": render_environment(config, digest),
-        "arch_pkg.sv": render_arch_package(config, digest),
-    }
-    if config["flow"]["lint"]:
-        outputs["rtl.f"] = render_filelist(
-            config, digest, project_root, output_dir
-        )
+    outputs = {"arch_pkg.sv": render_arch_package(config, digest)}
     if config["flow"]["synth"]:
+        outputs["constraints.sdc"] = render_constraints_sdc(config, digest)
+    if config["flow"]["sim"]:
         outputs.update(
             {
-                "constraints.sdc": render_constraints_sdc(config, digest),
-                "rtl.tcl": render_rtl_tcl(
-                    config, digest, project_root, output_dir
-                ),
-            }
-        )
-    if "dc" in config["flow"]["synth"]:
-        outputs.update(
-            {
-                "synth.dc.tcl": render_dc_tcl(config, digest),
-            }
-        )
-    if "verilator" in config["flow"]["sim"]:
-        outputs.update(
-            {
-                "sim.cmake": render_sim_cmake(
-                    config, digest, project_root, output_dir
-                ),
                 "demu/generated/cfg.hh": render_demu_config(config, digest),
                 "demu/generated/platform.hh": render_demu_platform(config, digest),
                 "demu/generated/demu_platform_pkg.sv": render_demu_platform_package(
@@ -1731,19 +1124,6 @@ def render_outputs(config, config_path, project_root, output_dir):
                 "demu/start.S": render_demu_start(config, digest),
             }
         )
-
-    output_names = sorted([*outputs, "manifest.json"])
-    manifest = {
-        **resolved,
-        "configuration_digest": digest,
-        "generator": {
-            "name": "project_config.py",
-            "version": GENERATOR_VERSION,
-        },
-        "project_file": relative_project_path(project_root, config_path),
-        "outputs": output_names,
-    }
-    outputs["manifest.json"] = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     return outputs
 
 
@@ -1764,73 +1144,3 @@ def atomic_write(path, content):
         except OSError:
             pass
         raise
-
-
-def remove_stale_outputs(output_dir, outputs):
-    stale_names = MANAGED_OUTPUT_NAMES - set(outputs)
-    for name in sorted(stale_names):
-        path = output_dir / name
-        if path.is_file() or path.is_symlink():
-            path.unlink()
-        elif path.exists():
-            raise ConfigError(f"stale generated output is not a file: {path}")
-
-
-def check_outputs(output_dir, outputs):
-    stale = []
-    for name, expected in sorted(outputs.items()):
-        path = output_dir / name
-        if not path.is_file() or path.read_text(encoding="utf-8") != expected:
-            stale.append(name)
-    if stale:
-        raise ConfigError(f"missing or stale generated file(s): {', '.join(stale)}")
-    unexpected = sorted(
-        name
-        for name in MANAGED_OUTPUT_NAMES - set(outputs)
-        if (output_dir / name).exists()
-    )
-    if unexpected:
-        raise ConfigError(f"unexpected generated file(s): {', '.join(unexpected)}")
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate", "generate", "check"))
-    parser.add_argument("config", type=Path)
-    parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path)
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    config_path = args.config.resolve()
-    project_root = args.project_root.resolve()
-    try:
-        config = load_config(config_path, project_root)
-        if args.command == "validate":
-            print(f"Configuration is valid: {config_path}")
-            return 0
-        if args.output is None:
-            raise ConfigError(f"--output is required for {args.command}")
-        output_dir = args.output.resolve()
-        outputs = render_outputs(config, config_path, project_root, output_dir)
-        if args.command == "generate":
-            for name, content in sorted(outputs.items()):
-                if name == "manifest.json":
-                    continue
-                atomic_write(output_dir / name, content)
-            remove_stale_outputs(output_dir, outputs)
-            atomic_write(output_dir / "manifest.json", outputs["manifest.json"])
-            print(f"Generated configuration: {output_dir}")
-        else:
-            check_outputs(output_dir, outputs)
-            print(f"Generated configuration is current: {output_dir}")
-        return 0
-    except (ConfigError, OSError, tomllib.TOMLDecodeError) as error:
-        sys.stderr.write(f"ERROR: {error}\n")
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

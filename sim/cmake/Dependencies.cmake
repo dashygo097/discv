@@ -1,13 +1,17 @@
 find_package(Threads REQUIRED)
-find_package(spdlog CONFIG REQUIRED)
+if(SIM_SPDLOG_VERSION)
+  find_package(spdlog ${SIM_SPDLOG_VERSION} EXACT CONFIG REQUIRED)
+else()
+  find_package(spdlog CONFIG REQUIRED)
+endif()
 find_package(verilator REQUIRED)
 
 if(NOT verilator_FOUND)
   message(FATAL_ERROR "Verilator not found. Install Verilator or set VERILATOR_ROOT.")
 endif()
 
-if(NOT SIM_RTL_SOURCES)
-  message(FATAL_ERROR "SIM_RTL_SOURCES is empty in generated sim.cmake")
+if(NOT EXISTS "${SIM_BENDER_FILELIST}")
+  message(FATAL_ERROR "Bender Verilator input file is missing")
 endif()
 if(NOT SIM_RTL_TOP)
   message(FATAL_ERROR "SIM_RTL_TOP is empty in generated sim.cmake")
@@ -24,10 +28,6 @@ set(DEMU_VERILATOR_ARGS
   "-DDEMU_RTL_TOP=${SIM_RTL_TOP}"
   ${SIM_VERILATOR_OPTIONS}
 )
-
-foreach(INCLUDE_DIR IN LISTS SIM_RTL_INCLUDE_DIRS)
-  list(APPEND DEMU_VERILATOR_ARGS "-I${INCLUDE_DIR}")
-endforeach()
 
 if(ENABLE_TRACE)
   list(APPEND DEMU_VERILATOR_ARGS --trace)

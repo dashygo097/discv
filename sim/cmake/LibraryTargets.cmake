@@ -5,25 +5,12 @@ add_library(demu
 )
 
 verilate(demu
-  SOURCES ${SIM_RTL_SOURCES} ${DEMU_RTL_SOURCES}
+  SOURCES "${SIM_BENDER_FILELIST}"
   VERILATOR_ARGS
     ${DEMU_VERILATOR_ARGS}
     -j 0
     --top-module ${TOP_MODULE}
-
-    --x-assign fast
-    --x-initial fast
-    --no-assert
-    --unroll-count 256
-    --unroll-stmts 100000
-
-    --output-split 4000
-    --output-split-cfuncs 2000
-    --output-split-ctrace 2000
-
-    --hierarchical
-
-    -CFLAGS "-O3 -march=native -funroll-loops -fomit-frame-pointer -Wno-unused-variable -Wno-bool-operation -Wno-parentheses-equality"
+    -f
 
   PREFIX V${TOP_MODULE}
   TRACE_THREADS ${NUM_TRACE_THREADS}

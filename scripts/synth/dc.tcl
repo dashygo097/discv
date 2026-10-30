@@ -1,3 +1,53 @@
+# DC-specific settings are interpreted here, not by the build driver.
+proc project_dc_get {table key fallback} {
+  if {[dict exists $table $key]} { return [dict get $table $key] }
+  return $fallback
+}
+
+proc project_dc_paths {paths} {
+  set result {}
+  foreach path $paths {
+    lappend result [file normalize [file join $::env(PROJECT_ROOT) $path]]
+  }
+  return $result
+}
+
+proc project_dc_config {project} {
+  if {![dict exists $project technology dc target_libraries]} {
+    error "selected technology requires dc.target_libraries"
+  }
+  set tech [dict get $project technology dc]
+  set flow [dict get $project flow]
+  set target [project_dc_paths [dict get $tech target_libraries]]
+  if {[llength $target] == 0} { error "dc.target_libraries must not be empty" }
+  set link [project_dc_paths [project_dc_get $tech link_libraries {}]]
+  set pairs {}
+  foreach pair [project_dc_get $tech library_pairs {}] {
+    set maximum [lindex [project_dc_paths [list [dict get $pair max]]] 0]
+    set minimum [lindex [project_dc_paths [list [dict get $pair min]]] 0]
+    if {[lsearch -exact [concat $target $link] $maximum] < 0} {
+      error "library_pairs.max must reference a target or link library: $maximum"
+    }
+    lappend pairs [list $maximum $minimum]
+  }
+  set compile [project_dc_get $flow compile ultra]
+  if {$compile ni {ultra standard}} { error "compile must be ultra or standard" }
+  foreach key {preserve_hierarchy retime clock_gating} {
+    set value [project_dc_get $flow $key [expr {$key eq "preserve_hierarchy"}]]
+    if {![string is boolean -strict $value]} { error "$key must be boolean" }
+    set $key $value
+  }
+  if {$retime && $compile ne "ultra"} { error "retime requires compile = ultra" }
+  return [dict create \
+    RTL_TOP [dict get $project architecture top] \
+    SYNTH_TARGET_LIBRARIES $target SYNTH_LINK_LIBRARIES $link \
+    SYNTH_SYNTHETIC_LIBRARIES [project_dc_paths [project_dc_get $tech synthetic_libraries {}]] \
+    SYNTH_MIN_LIBRARY_PAIRS $pairs \
+    SYNTH_SETUP_SCRIPTS [project_dc_paths [project_dc_get $tech setup_scripts {}]] \
+    SYNTH_COMPILE $compile SYNTH_PRESERVE_HIERARCHY $preserve_hierarchy \
+    SYNTH_RETIME $retime SYNTH_CLOCK_GATING $clock_gating]
+}
+
 proc project_require_environment {names} {
   foreach name $names {
     if {![info exists ::env($name)] || $::env($name) eq ""} {
@@ -14,9 +64,9 @@ proc project_require_file {path description} {
 
 proc project_main {} {
   project_require_environment {
-    RTL_TCL
+    BENDER_SCRIPT
     CONSTRAINTS_SDC
-    SYNTH_TOOL_CONFIG
+    STAGE_CONFIG
     STAGE_WORK_DIR
     STAGE_REPORT_DIR
     STAGE_RESULT_DIR
@@ -24,8 +74,9 @@ proc project_main {} {
     RTL_TOP
   }
 
-  source $::env(RTL_TCL)
-  source $::env(SYNTH_TOOL_CONFIG)
+  source $::env(STAGE_CONFIG)
+  set dc_config [project_dc_config $PROJECT]
+  dict with dc_config {}
 
   if {$RTL_TOP ne $::env(RTL_TOP)} {
     error "generated RTL top does not match the stage environment"
@@ -62,7 +113,6 @@ proc project_main {} {
   set_app_var sh_continue_on_error false
   set_app_var search_path [concat \
       [get_app_var search_path] \
-      $RTL_INCLUDE_DIRS \
       $library_search_paths]
   set_app_var target_library $SYNTH_TARGET_LIBRARIES
   set_app_var link_library [concat \
@@ -82,9 +132,13 @@ proc project_main {} {
   define_design_lib WORK -path $design_lib_dir
   set_svf [file join $result_dir ${RTL_TOP}.svf]
 
-  set analyze_command [list analyze -format sverilog -library WORK]
-  lappend analyze_command $RTL_SOURCES
-  eval $analyze_command
+  foreach script $SYNTH_SETUP_SCRIPTS {
+    project_require_file $script "technology setup script"
+    source $script
+  }
+  if {[source $::env(BENDER_SCRIPT)] eq "1"} {
+    error "Bender-generated HDL analysis failed"
+  }
 
   elaborate $RTL_TOP -library WORK
   current_design $RTL_TOP
@@ -111,9 +165,26 @@ proc project_main {} {
   }
 
   if {$SYNTH_COMPILE eq "ultra"} {
-    compile_ultra -no_autoungroup
+    set compile_command [list compile_ultra]
+    if {$SYNTH_PRESERVE_HIERARCHY} {
+      lappend compile_command -no_autoungroup
+    }
+    if {$SYNTH_RETIME} {
+      lappend compile_command -retime
+    }
+    if {$SYNTH_CLOCK_GATING} {
+      lappend compile_command -gate_clock
+    }
+    eval $compile_command
   } elseif {$SYNTH_COMPILE eq "standard"} {
-    compile
+    if {$SYNTH_RETIME} {
+      error "retime requires compile = ultra"
+    }
+    set compile_command [list compile]
+    if {$SYNTH_CLOCK_GATING} {
+      lappend compile_command -gate_clock
+    }
+    eval $compile_command
   } else {
     error "unsupported compilation mode: $SYNTH_COMPILE"
   }

@@ -22,21 +22,17 @@ module demu_virt_imem_bfm
   longint unsigned transaction_r;
   imem_rsp_t response_r;
 
-  function automatic int start_transaction(
-      input imem_req_t payload,
-      output longint unsigned transaction,
-      output imem_rsp_t transaction_response
-  );
+  function automatic int start_transaction(input imem_req_t payload,
+                                           output longint unsigned transaction,
+                                           output imem_rsp_t transaction_response);
     int unsigned data;
     bit error;
 
-    data  = '0;
+    data = '0;
     error = '0;
     transaction_response = '0;
 
-    if (demu_submit(
-            dpi_handle, PORT, 1'b0, payload.addr, '0, '0, 32'(4), transaction
-        ) != 0) begin
+    if (demu_submit(dpi_handle, PORT, 1'b0, payload.addr, '0, '0, 32'(4), transaction) != 0) begin
       start_transaction = -1;
     end else begin
       start_transaction = demu_poll(dpi_handle, transaction, data, error);
@@ -52,10 +48,9 @@ module demu_virt_imem_bfm
   end
 
   always_comb begin
-    request.ready = state_r == IDLE ||
-                    (state_r == HOLD_RESPONSE && response.ready);
+    request.ready = state_r == IDLE || (state_r == HOLD_RESPONSE && response.ready);
 
-    response.valid   = state_r == HOLD_RESPONSE;
+    response.valid = state_r == HOLD_RESPONSE;
     response.payload = response_r;
   end
 
@@ -75,7 +70,9 @@ module demu_virt_imem_bfm
           end
         end
 
-        case (start_transaction(request.payload, transaction, transaction_response))
+        case (start_transaction(
+            request.payload, transaction, transaction_response
+        ))
           -1: $fatal(1, "Failed to start instruction transaction");
           0:  state_r <= WAIT_DEVICE;
           1: begin

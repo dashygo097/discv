@@ -1,0 +1,8 @@
+# Project dependency declaration SHA256: 95b04baeb41d22ef741c72b6c24f414f7647aa645ff18ffc8c9f018c678f9c25
+packages:
+  common_cells:
+    revision: d97062d0da759bc87f7ebd9375317e69496d5cac
+    version: null
+    source:
+      Git: https://github.com/dashygo097/common_cells.git
+    dependencies: []

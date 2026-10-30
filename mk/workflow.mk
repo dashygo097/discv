@@ -1,9 +1,0 @@
-WORKFLOW_RUNNER := $(SCRIPT_DIR)/workflow/run.sh
-
-.PHONY: workflow
-
-workflow: config
-	@PROJECT_ROOT=$(PROJECT_ROOT) \
-	PROJECT_ENV=$(PROJECT_ENV) \
-	MAKE_BIN=$(MAKE) \
-	$(WORKFLOW_RUNNER)
