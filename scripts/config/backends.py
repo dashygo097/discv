@@ -1,4 +1,24 @@
-"""Backend descriptions and small adapters. Tool policy lives beside the tool."""
+"""Backend contract. Tool policy lives beside the tool.
+
+BACKEND declares tool/version_args, Bender format/source, commands, outputs,
+input globs, technology_inputs, tracked_environment and environment templates.
+generated_sources declares native Bender groups relative to build/generated;
+these configuration packages precede handwritten RTL in the projected manifest.
+summary="log" opts into using the execution log as the summary report.
+inherit_targets=True uses the prerequisite's source targets (e.g. equivalence).
+
+Optional hooks:
+  configure(config, settings, root): validate/normalize backend-owned settings.
+  generate(config, settings, root): shared generated files, relative to build/generated.
+  prepare(config, entry, root, directory, source): per-entry generated files.
+  tools(config, entry): extra tool identities as {name: [command, version_args...]}.
+  preflight(config, entry, root): backend-specific execution requirements.
+  collect(config, entry, directory, snapshot): publish native tool artifacts.
+  run(config, entry, directory): {commands: [...], inputs: [file paths...]}.
+
+Generation hooks return {relative_path: text}. Shared outputs must agree across
+entries. Commands are argv arrays; arbitrary options remain backend-owned.
+"""
 
 import runpy
 from pathlib import Path
@@ -14,6 +34,15 @@ def load_backend(root, stage, name, settings):
     if not definition.is_file():
         raise ConfigError("Backend description does not exist: " + str(definition))
     description = dict(runpy.run_path(str(definition))["BACKEND"])
+    for key in ("tool", "format"):
+        if not isinstance(description.get(key), str) or not description[key]:
+            raise ConfigError(f"{definition}: missing backend {key}")
+    description.setdefault("version_args", ["--version"])
+    string_list(description["version_args"], "backend version_args")
+    description.setdefault("source", "sources.f")
+    source = description["source"]
+    if not isinstance(source, str) or not source or Path(source).name != source:
+        raise ConfigError(f"{definition}: source must be a filename")
     resolved = {**description.pop("defaults", {}), **settings}
     for key in ("options", "targets"):
         resolved.setdefault(key, [])
@@ -22,6 +51,16 @@ def load_backend(root, stage, name, settings):
         string_list(resolved["inputs"], "inputs")
     if "version" in resolved and not isinstance(resolved["version"], str):
         raise ConfigError("version: expected a string")
+    for key in ("commands", "outputs"):
+        value = resolved.get(key, description.get(key))
+        if key == "outputs":
+            string_list(value, "backend outputs")
+        elif not isinstance(value, list) or not value:
+            raise ConfigError("backend commands: expected non-empty argv arrays")
+        else:
+            for argv in value:
+                if not string_list(argv, "backend command"):
+                    raise ConfigError("backend command: argv must not be empty")
     script = resolved.get("script")
     if script:
         resolved["script"] = str((root / script).resolve())
@@ -92,6 +131,7 @@ def context(config, entry, root, stage_dir, inputs, input_digest):
         "top": config["architecture"]["top"],
         "jobs": str(config["build"]["jobs"]),
         "script": entry["settings"].get("script", ""),
+        "input_digest": input_digest,
     }
 
 
@@ -137,6 +177,14 @@ def technology_inputs(technology, selectors):
     return result
 
 
-def invoke(entry, hook, *arguments):
-    function = runpy.run_path(entry["settings"]["_backend"]["definition"]).get(hook)
+def environment(config, entry, root, stage_dir, inputs, input_digest):
+    values = context(config, entry, root, stage_dir, inputs, input_digest)
+    return {
+        name: value.format_map(values)
+        for name, value in entry["settings"]["_backend"].get("environment", {}).items()
+    }
+
+
+def invoke(settings, hook, *arguments):
+    function = runpy.run_path(settings["_backend"]["definition"]).get(hook)
     return function(*arguments) if function else None

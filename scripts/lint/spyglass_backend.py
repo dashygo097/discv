@@ -5,6 +5,7 @@ BACKEND = {
     "version_args": ["-version"],
     "format": "flist-plus",
     "script": "spyglass.tcl",
+    "environment": {"RTL_FILELIST": "{inputs}/sources.f"},
     "commands": [
         [
             "spyglass",

@@ -66,7 +66,7 @@ def source(root, value):
     return result
 
 
-def manifest(config, root, frozen=True):
+def manifest(config, root, frozen=True, generated_sources=()):
     settings = config["bender"]
     dependencies = {}
     for name, spec in settings.get("dependencies", {}).items():
@@ -81,18 +81,20 @@ def manifest(config, root, frozen=True):
         "export_include_dirs": [
             path(root, item) for item in settings.get("export_include_dirs", [])
         ],
-        "sources": [source(root, item) for item in settings["sources"]],
+        "sources": [
+            source(root, item) for item in [*generated_sources, *settings["sources"]]
+        ],
     }
 
 
-def write_manifest(config, root, frozen=True):
+def write_manifest(config, root, frozen=True, generated_sources=()):
     content = "# Generated from Project.toml; do not edit.\n"
     # JSON is a YAML subset, eliminating a second serializer/dependency.
-    content += json.dumps(manifest(config, root, frozen), indent=2) + "\n"
+    content += json.dumps(manifest(config, root, frozen, generated_sources), indent=2) + "\n"
     atomic_write(root / "Bender.yml", content)
 
 
-def resolve(config, root, update=False):
+def resolve(config, root, update=False, generated_sources=()):
     actual = subprocess.check_output(
         ["bender", "--version"], universal_newlines=True
     ).strip()
@@ -118,7 +120,7 @@ def resolve(config, root, update=False):
     if update:
         previous = lock.read_bytes() if lock.exists() else None
         try:
-            write_manifest(config, root, frozen=False)
+            write_manifest(config, root, frozen=False, generated_sources=generated_sources)
             command(root, "update")
             native_lock = lock.read_text()
             native_lock = (
@@ -138,13 +140,13 @@ def resolve(config, root, update=False):
                 atomic_write(lock, previous.decode())
             raise
         finally:
-            write_manifest(config, root, frozen=True)
+            write_manifest(config, root, frozen=True, generated_sources=generated_sources)
     else:
         if not lock.exists() or not lock.read_text().startswith(header):
             raise ConfigError(
                 "Package declarations changed or Bender.lock is missing; run make deps-update"
             )
-        write_manifest(config, root)
+        write_manifest(config, root, generated_sources=generated_sources)
     before = lock.read_bytes()
     effective = json.loads(command(root, "config"))
     if effective.get("overrides"):

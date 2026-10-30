@@ -14,17 +14,14 @@ import time
 from pathlib import Path
 
 import bender
-from backends import (
-    commands,
-    configuration_tcl,
-    declared_outputs,
-    invoke,
-    technology_inputs,
-)
+from backends import commands, declared_outputs
+from backends import environment as backend_environment
+from backends import invoke, technology_inputs
 from project_config import (
     ConfigError,
     atomic_write,
     config_digest,
+    generated_sources,
     load_config,
     render_outputs,
 )
@@ -108,7 +105,7 @@ def provider_for(config, entry):
 
 def targets_for(config, entry):
     provider = provider_for(config, entry)
-    if provider:
+    if provider and entry["settings"]["_backend"].get("inherit_targets", False):
         return targets_for(config, provider)
     return list(
         dict.fromkeys(
@@ -135,7 +132,8 @@ def inputs_for(config, entry, groups):
     files.add(Path(entry["settings"]["_backend"]["definition"]))
     if entry["settings"].get("script"):
         files.add(Path(entry["settings"]["script"]))
-    for pattern in entry["settings"].get("inputs", []):
+    backend = entry["settings"]["_backend"]
+    for pattern in backend.get("inputs", []) + entry["settings"].get("inputs", []):
         matches = [path for path in ROOT.glob(pattern) if path.is_file()]
         if not matches:
             raise ConfigError("Declared input matched no files: " + pattern)
@@ -144,15 +142,10 @@ def inputs_for(config, entry, groups):
     # The native manifest is a projection, not another independent input.
     # Its semantic content is already in config and the resolved Bender groups.
     files.add(ROOT / "Bender.lock")
-    if entry["stage"] == "sim":
-        files.update(file for file in (ROOT / "sim").rglob("*") if file.is_file())
-        files.update(file for file in (GENERATED / "demu").rglob("*") if file.is_file())
     technology = config["technology"][entry["technology"]]
     selectors = entry["settings"]["_backend"].get("technology_inputs", [])
     for path in technology_inputs(technology, selectors):
         files.add(Path(path) if Path(path).is_absolute() else ROOT / path)
-    if (GENERATED / "constraints.sdc").is_file():
-        files.add(GENERATED / "constraints.sdc")
     files.update(Path(asset["path"]) for asset in technology.get("assets", {}).values())
     return {
         str(path): sha256(path) if path.is_file() else None for path in sorted(files)
@@ -202,43 +195,41 @@ def check_cached_outputs(config, entry, input_digest):
 
 
 def prepare(config, update=False):
-    provenance = bender.resolve(config, ROOT, update)
-    generated = render_outputs(config, ROOT / "Project.toml", ROOT, GENERATED)
+    resolved = entries(config)
+    generated = render_outputs(config)
+    source_groups = [bender.source(GENERATED, group) for group in generated_sources()]
+    for entry in resolved:
+        for group in entry["settings"]["_backend"].get("generated_sources", []):
+            group = bender.source(GENERATED, group)
+            if group not in source_groups:
+                source_groups.append(group)
+        outputs = (
+            invoke(entry["settings"], "generate", config, entry["settings"], ROOT) or {}
+        )
+        for name, content in outputs.items():
+            if name in generated and generated[name] != content:
+                raise ConfigError("Conflicting generated output: " + name)
+            generated[name] = content
     for name, content in generated.items():
+        if not (GENERATED / name).resolve().is_relative_to(GENERATED.resolve()):
+            raise ConfigError(
+                "Generated output resolves outside build/generated: " + name
+            )
         atomic_write(GENERATED / name, content)
-    # Remove only known obsolete projections from the previous architecture.
-    for name in (
-        "rtl.f",
-        "rtl.tcl",
-        "project.mk",
-        "project.env",
-        "sim.cmake",
-        "synth.dc.tcl",
-        ".done",
-    ):
-        path = GENERATED / name
-        if path.is_file():
-            path.unlink()
+    # Backend-generated HDL must exist before Bender resolves/globs sources.
+    provenance = bender.resolve(config, ROOT, update, generated_sources=source_groups)
     package_state = bender.packages(ROOT, config["build"]["reproducible"])
     effective_environment = {
         name: os.environ.get(name)
         for name in set(config["environment"]["required_variables"])
         | {
             "PATH",
-            "CC",
-            "CXX",
-            "CFLAGS",
-            "CXXFLAGS",
-            "LDFLAGS",
-            "CMAKE_PREFIX_PATH",
-            "VERILATOR_ROOT",
             "LC_ALL",
             "LANG",
             "TZ",
             "SOURCE_DATE_EPOCH",
         }
     }
-    resolved = entries(config)
     make_lines = [
         ".DELETE_ON_ERROR:",
         ".PHONY: lint synth formal sim sim-run workflow",
@@ -247,6 +238,7 @@ def prepare(config, update=False):
     by_stage = {stage: [] for stage in config["flow"]}
     snapshots = {}
     for entry in resolved:
+        backend = entry["settings"]["_backend"]
         directory = GENERATED / "flows" / entry["id"]
         directory.mkdir(parents=True, exist_ok=True)
         active_targets = targets_for(config, entry)
@@ -254,24 +246,31 @@ def prepare(config, update=False):
         export = bender.export(
             ROOT, active_targets, entry["settings"]["_backend"]["format"]
         )
-        script = directory / (
-            "sources.tcl" if entry["stage"] in ("synth", "formal") else "sources.f"
+        script = directory / backend["source"]
+        exports = {backend["source"]: export}
+        prepared = (
+            invoke(entry["settings"], "prepare", config, entry, ROOT, directory, script)
+            or {}
         )
-        atomic_write(script, export)
-        for name, content in (
-            invoke(entry, "prepare", config, entry, ROOT, directory, script) or {}
-        ).items():
+        for name, content in prepared.items():
+            if name in exports and exports[name] != content:
+                raise ConfigError("Conflicting backend output: " + name)
+            exports[name] = content
+        for name, content in exports.items():
+            if not (directory / name).resolve().is_relative_to(directory.resolve()):
+                raise ConfigError(
+                    "Backend output resolves outside its input directory: " + name
+                )
             atomic_write(directory / name, content)
-        if entry["stage"] in ("synth", "formal"):
-            atomic_write(directory / "backend.tcl", configuration_tcl(config, entry))
-        backend = entry["settings"]["_backend"]
         tools = {
             backend["tool"]: tool_identity(backend["tool"], backend["version_args"])
         }
-        for tool, arguments in backend.get("tools", {}).items():
-            tools[tool] = tool_identity(
-                os.environ.get("CXX", tool) if tool == "c++" else tool, arguments
-            )
+        tool_commands = {
+            **backend.get("tools", {}),
+            **(invoke(entry["settings"], "tools", config, entry) or {}),
+        }
+        for name, argv in tool_commands.items():
+            tools[name] = tool_identity(argv[0], argv[1:])
         snapshot = {
             "entry": entry,
             "configuration": config,
@@ -281,7 +280,13 @@ def prepare(config, update=False):
             "targets": active_targets,
             "sources": groups,
             "tools": tools,
-            "environment": effective_environment,
+            "environment": {
+                **effective_environment,
+                **{
+                    name: os.environ.get(name)
+                    for name in backend.get("tracked_environment", [])
+                },
+            },
             "files": inputs_for(config, entry, groups),
             "generated": {
                 name: hashlib.sha256(content.encode()).hexdigest()
@@ -289,13 +294,11 @@ def prepare(config, update=False):
             },
             "exports": {
                 str(path): sha256(path)
-                for path in directory.iterdir()
-                if path.name in ("sources.f", "sources.tcl", "backend.tcl", "sim.cmake")
+                for path in (directory / name for name in exports)
             },
             "export_contents": {
                 str(path): path.read_text()
-                for path in directory.iterdir()
-                if path.name in ("sources.f", "sources.tcl", "backend.tcl", "sim.cmake")
+                for path in (directory / name for name in exports)
             },
         }
         snapshot["input_digest"] = bender.digest(snapshot)
@@ -385,7 +388,11 @@ def preflight(config, snapshot):
         raise ConfigError(
             "EDA version mismatch: expected " + expected_version + ", got " + actual
         )
-    for path, checksum in {**snapshot["files"], **snapshot["exports"]}.items():
+    for path, checksum in {
+        **snapshot["files"],
+        **snapshot["exports"],
+        **snapshot.get("runtime_inputs", {}),
+    }.items():
         if checksum is None:
             raise ConfigError("Required input is missing: " + path)
         if not Path(path).is_file() or sha256(Path(path)) != checksum:
@@ -406,12 +413,6 @@ def preflight(config, snapshot):
                 raise ConfigError(
                     "Reproducible builds require environment.tool_versions." + name
                 )
-        if entry["stage"] == "sim" and not config["environment"]["packages"].get(
-            "spdlog"
-        ):
-            raise ConfigError(
-                "Reproducible simulation requires environment.packages.spdlog"
-            )
         for path in snapshot["files"]:
             if not Path(path).is_relative_to(ROOT) and path not in assets:
                 # External IP sources are pinned by Bender, technology assets by checksums.
@@ -424,6 +425,7 @@ def preflight(config, snapshot):
         for path, asset in assets.items():
             if not asset.get("sha256"):
                 raise ConfigError("Reproducible builds require asset SHA256: " + path)
+    invoke(entry["settings"], "preflight", config, entry, ROOT)
 
 
 def stream_command(argv, cwd, environment, log):
@@ -477,18 +479,24 @@ def execute(snapshot_path, run=False):
         RTL_TOP=config["architecture"]["top"],
         BUILD_JOBS=str(config["build"]["jobs"]),
         BENDER_SCRIPT=str(
-            snapshot_path.parent
-            / ("sources.tcl" if entry["stage"] in ("formal", "synth") else "sources.f")
+            snapshot_path.parent / entry["settings"]["_backend"]["source"]
         ),
-        RTL_FILELIST=str(snapshot_path.parent / "sources.f"),
-        STAGE_CONFIG=str(snapshot_path.parent / "backend.tcl"),
-        CONSTRAINTS_SDC=str(GENERATED / "constraints.sdc"),
         STAGE_WORK_DIR=str(directory / "work"),
         STAGE_REPORT_DIR=str(directory / "reports"),
         STAGE_RESULT_DIR=str(directory / "results"),
         DEPENDENCY_RESULTS=str(stage_path(provider_for(config, entry)) / "results")
         if provider_for(config, entry)
         else "",
+    )
+    environment.update(
+        backend_environment(
+            config,
+            entry,
+            ROOT,
+            directory,
+            snapshot_path.parent,
+            snapshot["input_digest"],
+        )
     )
     started = time.time()
     status = 1
@@ -512,16 +520,20 @@ def execute(snapshot_path, run=False):
                 raise ConfigError("Configuration changed after preparation; rerun make")
             preflight(config, snapshot)
             if run:
-                argv = invoke(entry, "run", config, entry, stage_path(entry))
-                if not argv:
+                runtime = invoke(
+                    entry["settings"], "run", config, entry, stage_path(entry)
+                )
+                if not runtime:
                     raise ConfigError(
                         "This backend has no simulation run implementation"
                     )
-                result_commands = [argv]
+                result_commands = runtime["commands"]
                 snapshot = dict(
                     snapshot,
-                    program={"path": argv[-1], "sha256": sha256(Path(argv[-1]))},
-                    simulation_arguments=argv[1:],
+                    runtime_inputs={
+                        str(path): sha256(Path(path))
+                        for path in runtime.get("inputs", [])
+                    },
                 )
             else:
                 result_commands = commands(
@@ -538,10 +550,11 @@ def execute(snapshot_path, run=False):
                 if status:
                     break
             if status == 0 and not run:
-                invoke(entry, "collect", config, entry, directory, snapshot)
+                invoke(entry["settings"], "collect", config, entry, directory, snapshot)
             summary = directory / "reports/summary.rpt"
             log.flush()
-            if entry["stage"] in ("lint", "sim") and not summary.exists() or status:
+            use_log = run or entry["settings"]["_backend"].get("summary") == "log"
+            if (use_log and not summary.exists()) or status:
                 shutil.copyfile(directory / "logs/run.log", summary)
             if status == 0:
                 # Never certify a run whose inputs were modified while EDA ran.
@@ -610,11 +623,6 @@ def main():
         with (ROOT / "build/.project.lock").open("a") as mutex:
             fcntl.flock(mutex, fcntl.LOCK_EX)
             config = load_config(ROOT / "Project.toml", ROOT)
-            # Generated HDL must exist before Bender resolves/globs the package.
-            for name, content in render_outputs(
-                config, ROOT / "Project.toml", ROOT, GENERATED
-            ).items():
-                atomic_write(GENERATED / name, content)
             prepare(config, update=args.action == "deps-update")
             if args.action in ("config", "deps-update"):
                 print("[CONFIG] Bender inputs and project configuration synchronized")

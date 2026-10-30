@@ -4,6 +4,8 @@ BACKEND = {
     "tool": "verilator",
     "version_args": ["--version"],
     "format": "verilator",
+    "summary": "log",
+    "tracked_environment": ["VERILATOR_ROOT"],
     "commands": [
         [
             "verilator",

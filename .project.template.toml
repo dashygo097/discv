@@ -11,18 +11,15 @@ version = "0.32.1"
 dependencies = { common_cells = { git = "https://github.com/dashygo097/common_cells.git", rev = "main" } }
 sources = [
   { include_dirs = [
-    "build/generated",
     "rtl/pkgs",
     "rtl/core",
   ], files = [
-    "build/generated/arch_pkg.sv",
     "rtl/pkgs/riscv_pkg.sv",
     "rtl/pkgs/core_types_pkg.sv",
     "rtl/core/**/*.sv",
     "rtl/top/**/*.sv",
   ] },
   { target = "simulation", files = [
-    "build/generated/demu/generated/demu_platform_pkg.sv",
     "sim/rtl/demu_dpi_pkg.sv",
     "sim/rtl/demu_virt_imem_bfm.sv",
     "sim/rtl/demu_virt_dmem_bfm.sv",
@@ -42,9 +39,21 @@ targets = ["generic"]
 [flow.lint.verilator]
 options = ["-Wno-fatal"]
 
-[flow.sim.verilator]
+[flow.sim.demu]
 targets = ["simulation"]
 options = ["-Wall", "-Wno-fatal"]
+reset_cycles = 5
+max_cycles = 1000000
+ports = [
+  { name = "imem", protocol = "virt" },
+  { name = "dmem", protocol = "virt" },
+]
+devices = [
+  { name = "imem", type = "tcm", base = 0x00000000, size = 0x01000000, load_address = 0x00000000 },
+  { name = "dmem", type = "tcm", base = 0x80000000, size = 0x01000000 },
+  { name = "host_exit", type = "host_exit", base = 0x10000000, size = 4 },
+  { name = "console", type = "console", base = 0x10000004, size = 4 },
+]
 
 [constraints]
 clocks = [
@@ -81,20 +90,6 @@ output_loads = [
   ], capacitance = 0.05 },
 ]
 design_rules = { max_transition = 0.50, max_fanout = 16, max_capacitance = 0.20 }
-
-[simulation]
-reset_cycles = 5
-max_cycles = 1000000
-ports = [
-  { name = "imem", protocol = "virt" },
-  { name = "dmem", protocol = "virt" },
-]
-devices = [
-  { name = "imem", type = "tcm", base = 0x00000000, size = 0x01000000, load_address = 0x00000000 },
-  { name = "dmem", type = "tcm", base = 0x80000000, size = 0x01000000 },
-  { name = "host_exit", type = "host_exit", base = 0x10000000, size = 4 },
-  { name = "console", type = "console", base = 0x10000004, size = 4 },
-]
 
 # Enable a synthesis backend after filling its technology libraries.
 # [technology.tsmc28]
