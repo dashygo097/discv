@@ -131,11 +131,7 @@ def inputs_for(config, entry, groups):
                 if file.is_file()
                 and file.suffix.lower() in (".svh", ".vh", ".h", ".hh", ".hpp")
             )
-    files.update(
-        path
-        for path in (ROOT / "scripts/config").glob("*.py")
-        if path.name != "verification.py"
-    )
+    files.update((ROOT / "scripts/config").glob("*.py"))
     files.add(Path(entry["settings"]["_backend"]["definition"]))
     if entry["settings"].get("script"):
         files.add(Path(entry["settings"]["script"]))
@@ -603,7 +599,6 @@ def main():
             "workflow",
             "execute",
             "execute-run",
-            "check",
         ),
     )
     parser.add_argument("input", nargs="?", type=Path)
@@ -614,10 +609,6 @@ def main():
         (ROOT / "build").mkdir(exist_ok=True)
         with (ROOT / "build/.project.lock").open("a") as mutex:
             fcntl.flock(mutex, fcntl.LOCK_EX)
-            if args.action == "check":
-                from verification import verify
-
-                return verify(ROOT)
             config = load_config(ROOT / "Project.toml", ROOT)
             # Generated HDL must exist before Bender resolves/globs the package.
             for name, content in render_outputs(

@@ -10,7 +10,6 @@ PYTHON_BIN=${PYTHON_BIN:-python3}
 VENV_DIR=${PROJECT_VENV_DIR:-${PROJECT_ROOT}/build/.venv}
 REQUIREMENTS=${SCRIPT_DIR}/requirements.txt
 
-require_python_version "${PYTHON_BIN}" 3 9
 require_file "${REQUIREMENTS}"
 
 if [[ -e "${VENV_DIR}" && ! -x "${VENV_DIR}/bin/python" ]]; then
@@ -27,6 +26,7 @@ if [[ -e "${VENV_DIR}" && ! -x "${VENV_DIR}/bin/python" ]]; then
 fi
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+  require_python_version "${PYTHON_BIN}" 3 9
   echo "[VENV] Creating ${VENV_DIR}"
   mkdir -p "$(dirname "${VENV_DIR}")"
   if ! "${PYTHON_BIN}" -m venv "${VENV_DIR}"; then
@@ -39,6 +39,7 @@ else
 fi
 
 VENV_PYTHON=${VENV_DIR}/bin/python
+require_python_version "${VENV_PYTHON}" 3 9
 
 if ! "${VENV_PYTHON}" -m pip --version >/dev/null 2>&1; then
   echo "[VENV] Installing pip with ensurepip"

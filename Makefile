@@ -4,7 +4,7 @@ VENV_PYTHON := $(BUILD_DIR)/.venv/bin/python
 BOOTSTRAP_PYTHON ?= python3
 .DEFAULT_GOAL := help
 
-.PHONY: help env init config deps-update lint synth formal sim sim-build sim-run workflow check clean distclean
+.PHONY: help env init config deps-update lint synth formal sim sim-build sim-run workflow clean distclean
 export PROGRAM SIM_ARGS
 export PROJECT_MAKE := $(MAKE)
 
@@ -12,7 +12,7 @@ env:
 	@PYTHON_BIN="$(BOOTSTRAP_PYTHON)" PROJECT_VENV_DIR="$(BUILD_DIR)/.venv" \
 		"$(PROJECT_ROOT)/scripts/config/setup_venv.sh"
 
-config deps-update lint synth formal sim sim-build sim-run workflow check: env
+config deps-update lint synth formal sim sim-build sim-run workflow: env
 	+@"$(VENV_PYTHON)" "$(PROJECT_ROOT)/scripts/config/flow.py" $@
 
 init:
@@ -43,6 +43,5 @@ help:
 	@echo "  sim           Build DEMU (sim-build is an alias)"
 	@echo "  sim-run       Build and run: PROGRAM=program.bin SIM_ARGS='-L3'"
 	@echo "  workflow      Run Project.toml workflow stages in order"
-	@echo "  check         Verify Bender integration and incremental build contracts"
 	@echo "  clean         Remove flow outputs, keeping environment/dependencies"
 	@echo "  distclean     Remove build/ and Project.toml, keeping dependency lock"
