@@ -50,35 +50,47 @@ def main():
             "Remove [framework]; bender.dependencies.dicflow selects dicflow"
         )
     settings = project["bender"]
-    if "dicflow" not in settings.get("dependencies", {}):
-        raise RuntimeError("Project.toml must declare bender.dependencies.dicflow")
+    native = "sources" not in settings
+    manifest = root / "Bender.yml"
+    if native:
+        if set(settings) != {"version"}:
+            raise RuntimeError(
+                "Native packages keep HDL metadata in Bender.yml; [bender] only specifies version"
+            )
+        if not manifest.is_file() or manifest.read_bytes().startswith(
+            b"# Generated from Project.toml;"
+        ):
+            raise RuntimeError("Native package flows require a native Bender.yml")
+        declaration = {
+            "native_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "bender_version": settings["version"],
+        }
+    else:
+        if "dicflow" not in settings.get("dependencies", {}):
+            raise RuntimeError("Project.toml must declare bender.dependencies.dicflow")
+        declaration = {
+            "dependencies": settings["dependencies"],
+            "bender_version": settings["version"],
+        }
     if bender(root, "--version") != "bender " + settings["version"]:
         raise RuntimeError("Bender version does not match Project.toml")
     if (root / "Bender.local").exists():
-        raise RuntimeError(
-            "Declare dependency overrides in Project.toml instead of Bender.local"
-        )
+        raise RuntimeError("Bender.local overrides are not allowed in locked workflows")
     declaration = hashlib.sha256(
-        json.dumps(
-            {
-                "dependencies": settings["dependencies"],
-                "bender_version": settings["version"],
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
+        json.dumps(declaration, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     header = HEADER + declaration + "\n"
     updating = action == "deps-update"
     lock = root / "Bender.lock"
-    manifest = root / "Bender.yml"
     (root / "build").mkdir(exist_ok=True)
     with (root / "build/.project.lock").open("a") as mutex:
         fcntl.flock(mutex, fcntl.LOCK_EX)
         previous = lock.read_bytes() if lock.exists() else None
         previous_manifest = manifest.read_bytes() if manifest.exists() else None
-        if previous_manifest is not None and not previous_manifest.startswith(
-            b"# Generated from Project.toml;"
+        if (
+            not native
+            and previous_manifest is not None
+            and not previous_manifest.startswith(b"# Generated from Project.toml;")
         ):
             raise RuntimeError(
                 "Refusing to overwrite a native Bender.yml with project configuration"
@@ -90,22 +102,23 @@ def main():
                 raise RuntimeError(
                     "Dependency declaration changed or Bender.lock is missing; run make deps-update"
                 )
-            manifest.write_text(
-                "# Generated from Project.toml; do not edit.\n"
-                + json.dumps(
-                    {
-                        "package": {"name": settings["name"]},
-                        "frozen": not updating,
-                        "dependencies": settings["dependencies"],
-                        "sources": [],
-                    },
-                    indent=2,
+            if not native:
+                manifest.write_text(
+                    "# Generated from Project.toml; do not edit.\n"
+                    + json.dumps(
+                        {
+                            "package": {"name": settings["name"]},
+                            "frozen": not updating,
+                            "dependencies": settings["dependencies"],
+                            "sources": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
             if updating:
-                bender(root, "update")
-                native = (
+                bender(root, "update", "--fetch")
+                native_lock = (
                     "\n".join(
                         line
                         for line in lock.read_text().splitlines()
@@ -113,13 +126,17 @@ def main():
                     )
                     + "\n"
                 )
-                lock.write_text(header + native)
+                lock.write_text(header + native_lock)
             if json.loads(bender(root, "config")).get("overrides"):
                 raise RuntimeError("Bender overrides bypass Project.toml")
             locked = lock.read_bytes()
             bender(root, "checkout")
             if lock.read_bytes() != locked:
                 raise RuntimeError("Ordinary checkout changed Bender.lock")
+            if native and manifest.read_bytes() != previous_manifest:
+                raise RuntimeError(
+                    "Native Bender.yml changed during dependency resolution; rerun make"
+                )
             directory = Path(bender(root, "path", "dicflow")).resolve()
             entry = directory / "scripts/config/entry.py"
             if not entry.is_file():
@@ -131,10 +148,11 @@ def main():
                 lock.unlink(missing_ok=True)
             else:
                 lock.write_bytes(previous)
-            if previous_manifest is None:
-                manifest.unlink(missing_ok=True)
-            else:
-                manifest.write_bytes(previous_manifest)
+            if not native:
+                if previous_manifest is None:
+                    manifest.unlink(missing_ok=True)
+                else:
+                    manifest.write_bytes(previous_manifest)
             raise
     environment = dict(
         os.environ,
