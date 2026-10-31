@@ -1,7 +1,7 @@
 # Project dependency declaration SHA256: dc9b67b757f737747c21ac7b27af03053b549dd9c2d891808fefd7e5e7e8c60e
 packages:
   common_cells:
-    revision: 6953bc6564d0f023449eef24147ec9302d7b61b8
+    revision: fdaba8916d30d3c0e79f3878c1e9fe23948855f6
     version: null
     source:
       Git: https://github.com/dashygo097/common_cells.git
