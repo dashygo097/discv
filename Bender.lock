@@ -1,8 +1,15 @@
-# Project dependency declaration SHA256: 95b04baeb41d22ef741c72b6c24f414f7647aa645ff18ffc8c9f018c678f9c25
+# Project dependency declaration SHA256: dc9b67b757f737747c21ac7b27af03053b549dd9c2d891808fefd7e5e7e8c60e
 packages:
   common_cells:
-    revision: 2431802815d3b21bc0daa1fbd7e39e27501ddf5e
+    revision: 6953bc6564d0f023449eef24147ec9302d7b61b8
     version: null
     source:
       Git: https://github.com/dashygo097/common_cells.git
+    dependencies:
+    - dicflow
+  dicflow:
+    revision: 082d0edbe6eb38f0527323747eec6b4e06b76285
+    version: null
+    source:
+      Git: https://github.com/dashygo097/dicflow.git
     dependencies: []

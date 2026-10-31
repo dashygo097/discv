@@ -1,13 +1,47 @@
-"""Native Bender manifest projection, locked resolution and script exports."""
+"""Stable project entry: locked Bender resolution and framework dispatch.
 
+This file also supplies the native Bender adapter used by the framework.
+Starter projects retain this bootstrap; tool policy executes from the locked
+framework package. The bootstrap contract is versioned independently.
+"""
+
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
-from project_config import ConfigError, atomic_write
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+BOOTSTRAP_API = 1
+
+
+class ConfigError(Exception):
+    pass
+
+
+def atomic_write(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_text(encoding="utf-8") == content:
+        return
+    descriptor, temporary = tempfile.mkstemp(
+        prefix="." + path.name, dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
 
 LOCK_HEADER = "# Project dependency declaration SHA256: "
 
@@ -68,22 +102,14 @@ def source(root, value):
 
 def manifest(config, root, frozen=True, generated_sources=()):
     settings = config["bender"]
-    dependencies = {}
-    for name, spec in settings.get("dependencies", {}).items():
-        spec = dict(spec) if isinstance(spec, dict) else spec
-        if isinstance(spec, dict) and "path" in spec:
-            spec["path"] = path(root, spec["path"])
-        dependencies[name] = spec
+    # Bender resolves project paths relative to its manifest. Keeping native
+    # declarations relative also makes versioned library manifests relocatable.
     return {
         "package": {"name": settings["name"]},
         "frozen": frozen,
-        "dependencies": dependencies,
-        "export_include_dirs": [
-            path(root, item) for item in settings.get("export_include_dirs", [])
-        ],
-        "sources": [
-            source(root, item) for item in [*generated_sources, *settings["sources"]]
-        ],
+        "dependencies": settings.get("dependencies", {}),
+        "export_include_dirs": settings.get("export_include_dirs", []),
+        "sources": [*generated_sources, *settings["sources"]],
     }
 
 
@@ -185,7 +211,18 @@ def sources(root, targets):
 def export(root, targets, format_name):
     args = [part for target in targets for part in ("-t", target)]
     # Never let different export formats introduce different implicit target sets.
-    return command(root, "script", "--no-default-target", *args, format_name)
+    content = command(root, "script", "--no-default-target", *args, format_name)
+    if format_name == "verilator":
+        # Bender 0.32 emits one argument per line without quoting whitespace.
+        # Preserve its arguments/order while encoding them for Verilator's -f
+        # parser; source discovery and target selection remain native Bender.
+        lines = []
+        for line in content.splitlines():
+            if line and not line.lstrip().startswith(("//", "#")):
+                line = '"' + line.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            lines.append(line)
+        content = "\n".join(lines) + "\n"
+    return content
 
 
 def packages(root, reproducible):
@@ -228,3 +265,85 @@ def packages(root, reproducible):
             )
         result[name] = state
     return result
+
+
+def framework_package(config):
+    if "framework" not in config:
+        return None
+    settings = config["framework"]
+    if not isinstance(settings, dict) or set(settings) != {"package"}:
+        raise ConfigError("framework: expected only package = <Bender dependency name>")
+    name = settings["package"]
+    if not isinstance(name, str) or not name.isidentifier():
+        raise ConfigError("framework.package: expected a Bender dependency name")
+    if name not in config.get("bender", {}).get("dependencies", {}):
+        raise ConfigError(
+            f"framework.package: {name} must be declared in bender.dependencies"
+        )
+    return name
+
+
+def main():
+    arguments = sys.argv[1:]
+    if not arguments:
+        raise ConfigError("Use make <stage> or make deps-update")
+    root = Path(os.environ.get("PROJECT_ROOT", os.getcwd())).resolve()
+    with (root / "Project.toml").open("rb") as stream:
+        config = tomllib.load(stream)
+    package = framework_package(config)
+    environment = dict(
+        os.environ,
+        PROJECT_ROOT=str(root),
+        PROJECT_BOOTSTRAP_API=str(BOOTSTRAP_API),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    for name in (
+        "PROJECT_FRAMEWORK_PACKAGE",
+        "PROJECT_FRAMEWORK_ROOT",
+        "PROJECT_BOOTSTRAP_UPDATED_LOCK",
+    ):
+        environment.pop(name, None)
+    engine = Path(__file__).with_name("flow.py")
+    if package:
+        (root / "build").mkdir(exist_ok=True)
+        with (root / "build/.project.lock").open("a") as mutex:
+            fcntl.flock(mutex, fcntl.LOCK_EX)
+            # HDL generators have not run yet. Resolve the package graph using
+            # an empty root fileset; the engine projects the complete manifest.
+            declaration = {
+                "bender": {**config["bender"], "sources": [], "export_include_dirs": []}
+            }
+            updating = arguments[0] == "deps-update"
+            lock = root / "Bender.lock"
+            previous = lock.read_text() if lock.exists() else None
+            try:
+                provenance = resolve(declaration, root, update=updating)
+                directory = Path(command(root, "path", package).strip()).resolve()
+                engine = directory / "scripts/config/flow.py"
+                if not engine.is_file():
+                    raise ConfigError(f"Framework entry does not exist: {engine}")
+            except BaseException:
+                if updating:
+                    if previous is None:
+                        lock.unlink(missing_ok=True)
+                    else:
+                        atomic_write(lock, previous)
+                raise
+            environment.update(
+                PROJECT_FRAMEWORK_PACKAGE=package, PROJECT_FRAMEWORK_ROOT=str(directory)
+            )
+            if updating:
+                environment["PROJECT_BOOTSTRAP_UPDATED_LOCK"] = provenance[
+                    "lock_sha256"
+                ]
+    if not engine.is_file():
+        raise ConfigError(f"Framework entry does not exist: {engine}")
+    os.execve(sys.executable, [sys.executable, str(engine), *arguments], environment)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ConfigError, OSError, ValueError, subprocess.SubprocessError) as error:
+        print("ERROR: " + str(error), file=sys.stderr)
+        raise SystemExit(1)

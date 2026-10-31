@@ -1,27 +1,33 @@
-PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+PROJECT_ROOT := $(CURDIR)
 BUILD_DIR := $(PROJECT_ROOT)/build
 VENV_PYTHON := $(BUILD_DIR)/.venv/bin/python
 BOOTSTRAP_PYTHON ?= python3
 .DEFAULT_GOAL := help
 
-.PHONY: help env init config deps-update lint synth formal sim sim-build sim-run workflow clean distclean
+.PHONY: help env init clean distclean $(MAKECMDGOALS)
 export PROGRAM SIM_ARGS
 export PROJECT_MAKE := $(MAKE)
+export PROJECT_ROOT
+FLOW_GOALS := $(filter-out help env init clean distclean,$(MAKECMDGOALS))
 
 env:
 	@PYTHON_BIN="$(BOOTSTRAP_PYTHON)" PROJECT_VENV_DIR="$(BUILD_DIR)/.venv" \
 		"$(PROJECT_ROOT)/scripts/config/setup_venv.sh"
 
-config deps-update lint synth formal sim sim-build sim-run workflow: env
-	+@"$(VENV_PYTHON)" "$(PROJECT_ROOT)/scripts/config/flow.py" $@
+ifneq ($(strip $(FLOW_GOALS)),)
+$(FLOW_GOALS): env
+	+@"$(VENV_PYTHON)" "$(PROJECT_ROOT)/scripts/config/bootstrap.py" $@
+endif
 
 init:
 	@test ! -e "$(PROJECT_ROOT)/Project.toml" || { echo "ERROR: Project.toml already exists" >&2; exit 1; }
 	@cp "$(PROJECT_ROOT)/.project.template.toml" "$(PROJECT_ROOT)/Project.toml"
 
 clean:
-	@rm -rf "$(BUILD_DIR)/generated" "$(BUILD_DIR)/lint" "$(BUILD_DIR)/synth" \
-		"$(BUILD_DIR)/formal" "$(BUILD_DIR)/sim"
+	@for directory in "$(BUILD_DIR)"/*; do \
+		if test -f "$$directory/.flow-stage"; then rm -rf "$$directory"; fi; \
+	done
+	@rm -rf "$(BUILD_DIR)/generated"
 	@rm -f "$(PROJECT_ROOT)/Bender.yml"
 	@echo "[CLEAN] Flow outputs removed; environment and package lock preserved"
 
@@ -36,11 +42,11 @@ help:
 	@echo "  init          Create Project.toml from the template"
 	@echo "  env           Prepare the Python environment"
 	@echo "  config        Generate configuration and locked Bender tool inputs"
-	@echo "  deps-update   Explicitly resolve/update Bender.lock"
+	@echo "  deps-update   Explicitly resolve/update locked dependencies"
 	@echo "  lint          Run all configured linters/technologies"
 	@echo "  synth         Run all configured synthesis backends/technologies"
 	@echo "  formal        Compare RTL with the final synthesized gate netlist"
-	@echo "  sim           Build DEMU (sim-build is an alias)"
+	@echo "  <stage>       Run the backends declared in flow.<stage>"
 	@echo "  sim-run       Build and run: PROGRAM=program.bin SIM_ARGS='-L3'"
 	@echo "  workflow      Run Project.toml workflow stages in order"
 	@echo "  clean         Remove flow outputs, keeping environment/dependencies"

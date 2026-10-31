@@ -12,3 +12,4 @@ __pycache__/
 
 # garbage
 .DS_Store
+.ruff_cache/
