@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 from project_config import (
-    ARCH_FEATURES,
     IDENTIFIER,
     ConfigError,
     config_digest,
@@ -366,7 +365,7 @@ def render_demu_config(config, digest):
         *[
             f"inline constexpr bool HAS_{feature.upper()} = "
             f"{'true' if architecture['features'][feature] else 'false'};"
-            for feature in ARCH_FEATURES
+            for feature in architecture["features"]
         ],
     ]
 

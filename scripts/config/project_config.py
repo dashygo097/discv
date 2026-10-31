@@ -37,12 +37,6 @@ ARCH_FEATURES = (
     "zicsr",
     "zifencei",
 )
-MICROARCHITECTURE_CAPABILITIES = {
-    "cpu_5stage_top": {
-        "xlen": 32,
-        "extensions": frozenset({"i"}),
-    },
-}
 
 
 class ConfigError(Exception):
@@ -111,33 +105,6 @@ def parse_riscv_march(march):
     if "i" in extensions and "e" in extensions:
         raise ConfigError('architecture.march: base ISAs "i" and "e" conflict')
     return xlen, frozenset(extensions)
-
-
-def validate_microarchitecture(top, xlen, extensions):
-    capability = MICROARCHITECTURE_CAPABILITIES.get(top)
-    if capability is None:
-        known = ", ".join(sorted(MICROARCHITECTURE_CAPABILITIES))
-        raise ConfigError(
-            f"architecture.top: no capability contract is registered for {top}; "
-            f"known microarchitectures: {known}"
-        )
-    if xlen != capability["xlen"]:
-        raise ConfigError(
-            f"architecture.march: {top} supports RV{capability['xlen']}, "
-            f"but RV{xlen} was requested"
-        )
-    unsupported = sorted(extensions - capability["extensions"])
-    missing = sorted(capability["extensions"] - extensions)
-    if unsupported or missing:
-        details = []
-        if unsupported:
-            details.append(f"unsupported extension(s): {', '.join(unsupported)}")
-        if missing:
-            details.append(f"required extension(s) missing: {', '.join(missing)}")
-        raise ConfigError(
-            f"architecture.march: {top} does not support the requested ISA "
-            f"({'; '.join(details)})"
-        )
 
 
 def reject_unknown(table, allowed, location):
@@ -403,12 +370,14 @@ def load_config(config_path, project_root):
     top = require_string(architecture, "top", "architecture")
     if not IDENTIFIER.fullmatch(top):
         raise ConfigError("architecture.top: invalid identifier")
-    validate_microarchitecture(top, xlen, extensions)
     architecture = dict(
         architecture,
         xlen=xlen,
         extensions=sorted(extensions),
-        features={feature: feature in extensions for feature in ARCH_FEATURES},
+        features={
+            feature: feature in extensions
+            for feature in sorted(set(ARCH_FEATURES) | extensions)
+        },
         reset_vector=unsigned_integer(
             architecture.get("reset_vector"),
             "architecture.reset_vector",
@@ -582,7 +551,7 @@ def render_arch_package(config, digest):
         "  typedef struct packed {",
         "    int unsigned xlen;",
         "    logic [63:0] reset_vector;",
-        *[f"    logic has_{feature};" for feature in ARCH_FEATURES],
+        *[f"    logic has_{feature};" for feature in architecture["features"]],
         "  } arch_t;",
         "",
         f"  localparam int unsigned XLEN = 32'd{architecture['xlen']};",
@@ -593,7 +562,7 @@ def render_arch_package(config, digest):
         "      reset_vector: RESET_VECTOR,",
         *[
             f"      has_{feature}: 1'b{int(architecture['features'][feature])},"
-            for feature in ARCH_FEATURES
+            for feature in architecture["features"]
         ],
         "      default: '0",
         "  };",
