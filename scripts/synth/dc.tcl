@@ -134,9 +134,10 @@ proc project_main {} {
 
   foreach script $SYNTH_SETUP_SCRIPTS {
     project_require_file $script "technology setup script"
-    source $script
+    uplevel #0 [list source $script]
   }
-  if {[source $::env(BENDER_SCRIPT)] eq "1"} {
+  # Bender reads and updates DC application variables in the global scope.
+  if {[uplevel #0 [list source $::env(BENDER_SCRIPT)]] eq "1"} {
     error "Bender-generated HDL analysis failed"
   }
 
@@ -154,7 +155,7 @@ proc project_main {} {
     error "check_design failed before compilation"
   }
 
-  source $::env(CONSTRAINTS_SDC)
+  uplevel #0 [list source $::env(CONSTRAINTS_SDC)]
 
   set check_timing_ok true
   redirect -file [file join $report_dir check_timing.pre.rpt] {
@@ -227,9 +228,10 @@ proc project_main {} {
   set_svf -off
 }
 
-set project_status [catch {project_main} project_error]
+set project_status [catch {project_main} project_error project_options]
 if {$project_status != 0} {
   puts stderr "ERROR: $project_error"
+  puts stderr [dict get $project_options -errorinfo]
   exit 1
 }
 exit 0

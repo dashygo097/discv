@@ -90,7 +90,9 @@ def manifest(config, root, frozen=True, generated_sources=()):
 def write_manifest(config, root, frozen=True, generated_sources=()):
     content = "# Generated from Project.toml; do not edit.\n"
     # JSON is a YAML subset, eliminating a second serializer/dependency.
-    content += json.dumps(manifest(config, root, frozen, generated_sources), indent=2) + "\n"
+    content += (
+        json.dumps(manifest(config, root, frozen, generated_sources), indent=2) + "\n"
+    )
     atomic_write(root / "Bender.yml", content)
 
 
@@ -120,7 +122,9 @@ def resolve(config, root, update=False, generated_sources=()):
     if update:
         previous = lock.read_bytes() if lock.exists() else None
         try:
-            write_manifest(config, root, frozen=False, generated_sources=generated_sources)
+            write_manifest(
+                config, root, frozen=False, generated_sources=generated_sources
+            )
             command(root, "update")
             native_lock = lock.read_text()
             native_lock = (
@@ -140,7 +144,9 @@ def resolve(config, root, update=False, generated_sources=()):
                 atomic_write(lock, previous.decode())
             raise
         finally:
-            write_manifest(config, root, frozen=True, generated_sources=generated_sources)
+            write_manifest(
+                config, root, frozen=True, generated_sources=generated_sources
+            )
     else:
         if not lock.exists() or not lock.read_text().startswith(header):
             raise ConfigError(

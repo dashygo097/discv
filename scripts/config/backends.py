@@ -2,6 +2,8 @@
 
 BACKEND declares tool/version_args, Bender format/source, commands, outputs,
 input globs, technology_inputs, tracked_environment and environment templates.
+views maps stable editor filenames to declared output templates. The driver
+publishes these separately from each build's cache and artifact checksums.
 generated_sources declares native Bender groups relative to build/generated;
 these configuration packages precede handwritten RTL in the projected manifest.
 summary="log" opts into using the execution log as the summary report.
@@ -40,6 +42,17 @@ def load_backend(root, stage, name, settings):
     description.setdefault("version_args", ["--version"])
     string_list(description["version_args"], "backend version_args")
     description.setdefault("source", "sources.f")
+    views = description.get("views", {})
+    if not isinstance(views, dict) or any(
+        not isinstance(name, str)
+        or not name
+        or Path(name).name != name
+        or name in {".", "..", ".outputs.json"}
+        or not isinstance(pattern, str)
+        or not pattern
+        for name, pattern in views.items()
+    ):
+        raise ConfigError(f"{definition}: views must map filenames to output templates")
     source = description["source"]
     if not isinstance(source, str) or not source or Path(source).name != source:
         raise ConfigError(f"{definition}: source must be a filename")
@@ -157,7 +170,15 @@ def declared_outputs(config, entry, root, stage_dir, inputs, input_digest):
     patterns = entry["settings"].get(
         "outputs", entry["settings"]["_backend"]["outputs"]
     )
-    return [Path(pattern.format_map(values)) for pattern in patterns]
+    paths = [Path(pattern.format_map(values)) for pattern in patterns]
+    for path in paths:
+        if not path.resolve().is_relative_to(stage_dir.resolve()):
+            raise ConfigError(
+                f"Backend output must belong to its stage directory: {path}"
+            )
+    if len(set(paths)) != len(paths):
+        raise ConfigError("Backend outputs must be distinct")
+    return paths
 
 
 def technology_inputs(technology, selectors):

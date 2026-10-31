@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import bender
-from backends import commands, declared_outputs
+from backends import commands, context, declared_outputs
 from backends import environment as backend_environment
 from backends import invoke, technology_inputs
 from project_config import (
@@ -42,6 +42,31 @@ def write_json(path, value):
     atomic_write(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def synchronize_outputs(directory, contents):
+    # Remove only files previously owned by this publisher, never arbitrary files.
+    inventory = directory / ".outputs.json"
+    previous = json.loads(inventory.read_text()) if inventory.exists() else []
+    if not isinstance(previous, list) or any(
+        not isinstance(name, str) for name in previous
+    ):
+        raise ConfigError(f"Invalid generated output inventory: {inventory}")
+    if not contents and not previous:
+        return
+    for name in set(previous) | set(contents):
+        path = directory / name
+        if (
+            name == inventory.name
+            or path.resolve() == directory.resolve()
+            or not path.resolve().is_relative_to(directory.resolve())
+        ):
+            raise ConfigError(f"Generated output resolves outside its owner: {name}")
+    for name, content in contents.items():
+        atomic_write(directory / name, content)
+    for name in set(previous) - set(contents):
+        (directory / name).unlink(missing_ok=True)
+    write_json(inventory, sorted(contents))
+
+
 def tool_identity(command, arguments):
     executable = shutil.which(command)
     if executable is None:
@@ -54,8 +79,13 @@ def tool_identity(command, arguments):
             text=True,
             timeout=30,
         )
-    except subprocess.TimeoutExpired:
-        raise ConfigError("Timed out querying tool version: " + command)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {
+            "command": command,
+            "available": False,
+            "path": str(Path(executable).resolve()),
+            "error": str(error),
+        }
     return {
         "command": command,
         "available": True,
@@ -174,7 +204,7 @@ def check_cached_outputs(config, entry, input_digest):
     directory = stage_path(entry)
     stamp = directory / ".done"
     if not stamp.exists():
-        return
+        return False
     run = directory / "run.json"
     try:
         record = json.loads(run.read_text())
@@ -183,6 +213,8 @@ def check_cached_outputs(config, entry, input_digest):
             and record["inputs"]["input_digest"] == input_digest
             and stamp.read_text().strip() == input_digest
             and record["artifacts"]
+            and set(record["artifacts"])
+            == {str(path) for path in artifact_paths(config, entry)}
             and all(
                 Path(path).is_file() and sha256(Path(path)) == digest
                 for path, digest in record["artifacts"].items()
@@ -192,10 +224,67 @@ def check_cached_outputs(config, entry, input_digest):
         valid = False
     if not valid:
         stamp.unlink()
+    return bool(valid)
 
 
-def prepare(config, update=False):
+def publish_views(config):
+    configured = entries(config)
+    for stage in config["flow"]:
+        contents, producers = {}, {}
+        for entry in (item for item in configured if item["stage"] == stage):
+            views = entry["settings"]["_backend"].get("views", {})
+            if not views:
+                continue
+            snapshot_path = GENERATED / "flows" / entry["id"] / "inputs.json"
+            snapshot = (
+                json.loads(snapshot_path.read_text())
+                if snapshot_path.is_file()
+                else None
+            )
+            valid = snapshot is not None and check_cached_outputs(
+                config, entry, snapshot["input_digest"]
+            )
+            values = context(
+                config,
+                entry,
+                ROOT,
+                stage_path(entry),
+                snapshot_path.parent,
+                snapshot["input_digest"] if snapshot else "",
+            )
+            for name, pattern in views.items():
+                destination = f"{entry['technology']}/{entry['tool']}/{name}"
+                producers.setdefault(name, []).append(destination)
+                if valid:
+                    source = Path(pattern.format_map(values))
+                    if source not in artifact_paths(config, entry):
+                        raise ConfigError(
+                            f"Published view is not a declared build output: {source}"
+                        )
+                    contents[destination] = source.read_text()
+        for name, destinations in producers.items():
+            # An automatic stage-wide view is meaningful only for one producer.
+            if len(destinations) == 1 and destinations[0] in contents:
+                contents[name] = contents[destinations[0]]
+        synchronize_outputs(GENERATED / stage, contents)
+
+
+def prepare(config, update=False, stages=None):
     resolved = entries(config)
+    selected = set()
+
+    def select(entry):
+        if entry["id"] in selected:
+            return
+        selected.add(entry["id"])
+        provider = provider_for(config, entry)
+        if provider:
+            select(provider)
+
+    for entry in resolved:
+        if stages is None or entry["stage"] in stages:
+            select(entry)
+    active = [entry for entry in resolved if entry["id"] in selected]
     generated = render_outputs(config)
     source_groups = [bender.source(GENERATED, group) for group in generated_sources()]
     for entry in resolved:
@@ -210,12 +299,7 @@ def prepare(config, update=False):
             if name in generated and generated[name] != content:
                 raise ConfigError("Conflicting generated output: " + name)
             generated[name] = content
-    for name, content in generated.items():
-        if not (GENERATED / name).resolve().is_relative_to(GENERATED.resolve()):
-            raise ConfigError(
-                "Generated output resolves outside build/generated: " + name
-            )
-        atomic_write(GENERATED / name, content)
+    synchronize_outputs(GENERATED, generated)
     # Backend-generated HDL must exist before Bender resolves/globs sources.
     provenance = bender.resolve(config, ROOT, update, generated_sources=source_groups)
     package_state = bender.packages(ROOT, config["build"]["reproducible"])
@@ -237,7 +321,7 @@ def prepare(config, update=False):
     ]
     by_stage = {stage: [] for stage in config["flow"]}
     snapshots = {}
-    for entry in resolved:
+    for entry in active:
         backend = entry["settings"]["_backend"]
         directory = GENERATED / "flows" / entry["id"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -333,7 +417,7 @@ def prepare(config, update=False):
             )
     make_lines.append("workflow: " + " ".join(config["workflow"]["stages"]))
     make_lines.append("sim-run: sim")
-    sim_entries = [entry for entry in resolved if entry["stage"] == "sim"]
+    sim_entries = [entry for entry in active if entry["stage"] == "sim"]
     if len(sim_entries) == 1:
         sim_input = GENERATED / "flows" / sim_entries[0]["id"] / "inputs.json"
         make_lines.append(
@@ -359,7 +443,7 @@ def prepare(config, update=False):
             "flows": {key: value["input_digest"] for key, value in snapshots.items()},
         },
     )
-    return resolved
+    return active
 
 
 def preflight(config, snapshot):
@@ -371,6 +455,11 @@ def preflight(config, snapshot):
             raise ConfigError("Required environment variable is unset: " + name)
     for name, identity in snapshot["tools"].items():
         if not identity["available"]:
+            if identity.get("error"):
+                raise ConfigError(
+                    f"Required tool cannot be executed: {name} ({identity['path']}): "
+                    f"{identity['error']}"
+                )
             raise ConfigError("Required tool not found: " + name)
         executable = Path(identity["path"])
         if (
@@ -623,15 +712,22 @@ def main():
         with (ROOT / "build/.project.lock").open("a") as mutex:
             fcntl.flock(mutex, fcntl.LOCK_EX)
             config = load_config(ROOT / "Project.toml", ROOT)
-            prepare(config, update=args.action == "deps-update")
-            if args.action in ("config", "deps-update"):
-                print("[CONFIG] Bender inputs and project configuration synchronized")
-                return 0
             goals = (
                 config["workflow"]["stages"]
                 if args.action == "workflow"
                 else ["sim" if args.action == "sim-build" else args.action]
             )
+            if args.action == "config":
+                stages = None
+            elif args.action == "deps-update":
+                stages = []
+            else:
+                stages = ["sim" if goal == "sim-run" else goal for goal in goals]
+            prepare(config, update=args.action == "deps-update", stages=stages)
+            publish_views(config)
+            if args.action in ("config", "deps-update"):
+                print("[CONFIG] Bender inputs and project configuration synchronized")
+                return 0
             if not goals:
                 print("[WORKFLOW] No stages configured")
             for goal in goals:
@@ -650,6 +746,7 @@ def main():
                 )
                 if status:
                     return status
+                publish_views(config)
             return 0
     except (ConfigError, OSError, ValueError, subprocess.SubprocessError) as error:
         print("ERROR: " + str(error), file=sys.stderr)

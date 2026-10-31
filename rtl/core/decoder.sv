@@ -388,9 +388,9 @@ module decoder
       );
 
       // Memory ordering
-      INSTR_FENCE: ctrl_o = make_decode_ctrl(.serialize(1'b1));
+      INSTR_FENCE: ctrl_o = make_decode_ctrl(.alu_op(ALU_NONE), .serialize(1'b1));
 
-      default: ctrl_o = make_decode_ctrl(.illegal(1'b1));
+      default: ctrl_o = make_decode_ctrl(.alu_op(ALU_NONE), .illegal(1'b1));
     endcase
   end
 

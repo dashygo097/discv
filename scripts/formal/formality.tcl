@@ -23,9 +23,9 @@ proc project_main {} {
     }
   }
   set_app_var sh_continue_on_error false
-  set synopsys_auto_setup true
+  set ::synopsys_auto_setup true
   set_svf $guidance
-  if {[source $::env(BENDER_SCRIPT)] eq "1"} {
+  if {[uplevel #0 [list source $::env(BENDER_SCRIPT)]] eq "1"} {
     error "Bender-generated reference read failed"
   }
   if {![set_top r:/WORK/$top]} {
@@ -51,8 +51,9 @@ proc project_main {} {
     error "RTL-to-gate equivalence verification failed"
   }
 }
-if {[catch {project_main} message]} {
+if {[catch {project_main} message options]} {
   puts stderr "ERROR: $message"
+  puts stderr [dict get $options -errorinfo]
   exit 1
 }
 exit 0

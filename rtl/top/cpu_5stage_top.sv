@@ -299,7 +299,12 @@ module cpu_5stage_top
         rs2: decode_rs2,
         rd: decode_rd,
         immediate: decode_immediate,
-        ctrl: if_id_output.payload.error ? make_decode_ctrl(.illegal(1'b1)) : decode_ctrl
+        ctrl:
+        if_id_output.payload.error
+        ?
+        make_decode_ctrl(.alu_op(ALU_NONE), .illegal(1'b1))
+        :
+        decode_ctrl
     };
     if_id_output.ready = id_issue_input.ready;
   end

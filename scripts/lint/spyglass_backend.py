@@ -1,5 +1,7 @@
 """SpyGlass lint integration."""
 
+from backends import tcl_value
+
 BACKEND = {
     "tool": "spyglass",
     "version_args": ["-version"],
@@ -10,7 +12,7 @@ BACKEND = {
         [
             "spyglass",
             "-project",
-            "{script}",
+            "{inputs}/spyglass.prj",
             "-goals",
             "lint/lint_rtl",
             "-batch",
@@ -19,6 +21,10 @@ BACKEND = {
     ],
     "outputs": ["{reports}/summary.rpt"],
 }
+
+
+def prepare(config, entry, root, directory, source):
+    return {"spyglass.prj": f"source {tcl_value(entry['settings']['script'])}\n"}
 
 
 def collect(config, entry, directory, snapshot):
