@@ -2,21 +2,8 @@ schema_version = 7
 
 [design]
 top = ""
-
-[architecture]
-generator = "scripts/project/riscv_config.py"
-march = "rv32i"
-reset_vector = 0x00000000
-
-[bender]
-name = "discv"
-version = "0.32.1"
-dependencies = { common_cells = { git = "https://github.com/dashygo097/common_cells.git", rev = "main" }, dicflow = { git = "https://github.com/dashygo097/dicflow.git", rev = "main" } }
 sources = [
-  { include_dirs = [
-    "rtl/pkgs",
-    "rtl/core",
-  ], files = [
+  { include_dirs = ["rtl/pkgs", "rtl/core"], files = [
     "rtl/pkgs/riscv_pkg.sv",
     "rtl/pkgs/core_types_pkg.sv",
     "rtl/core/**/*.sv",
@@ -30,6 +17,14 @@ sources = [
     "sim/rtl/demu_sim_top.sv",
   ] },
 ]
+
+[architecture]
+generator = "scripts/project/riscv_config.py"
+march = "rv32i"
+reset_vector = 0x00000000
+
+[bender]
+version = "0.32.1"
 
 [build]
 jobs = 1

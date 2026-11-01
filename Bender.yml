@@ -1,0 +1,9 @@
+package:
+  name: discv
+  description: Configurable RISC-V CPU and simulation platform
+
+dependencies:
+  axi: { git: "https://github.com/dashygo097/axi.git", rev: main }
+  common_cells:
+    { git: "https://github.com/dashygo097/common_cells.git", rev: main }
+  dicflow: { git: "https://github.com/dashygo097/dicflow.git", rev: main }

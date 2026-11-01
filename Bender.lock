@@ -1,14 +1,21 @@
-# Project dependency declaration SHA256: dc9b67b757f737747c21ac7b27af03053b549dd9c2d891808fefd7e5e7e8c60e
 packages:
+  axi:
+    revision: b25063c69df71de6370708eaf4ff341aa0652321
+    version: null
+    source:
+      Git: https://github.com/dashygo097/axi.git
+    dependencies:
+    - common_cells
+    - dicflow
   common_cells:
-    revision: 9653a53f94478b02f722fec64291868eeaad8135
+    revision: 296e651379334fc92ab82d3fbd96be1ad277125f
     version: null
     source:
       Git: https://github.com/dashygo097/common_cells.git
     dependencies:
     - dicflow
   dicflow:
-    revision: 9be8f428c0f1b1b571425db383a51d5ddde70344
+    revision: 506a8dfd3256d5f29b15008add3e775e5f0a4950
     version: null
     source:
       Git: https://github.com/dashygo097/dicflow.git
