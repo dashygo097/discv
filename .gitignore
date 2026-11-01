@@ -1,3 +1,4 @@
+/.project.lock
 # build files
 /Project.toml
 build/

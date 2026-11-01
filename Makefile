@@ -8,10 +8,10 @@ init:
 	@test ! -e Project.toml || { echo 'ERROR: Project.toml already exists' >&2; exit 1; }
 	@cp .project.template.toml Project.toml
 
-clean distclean:
+clean distclean deps-update:
 	@"$(BOOTSTRAP_PYTHON)" "$(CURDIR)/scripts/bootstrap.py" "$@"
 
-help $(filter-out init help clean distclean,$(MAKECMDGOALS)):
+help $(filter-out init help clean distclean deps-update,$(MAKECMDGOALS)):
 	+@if test -x "$(CURDIR)/build/.venv/bin/python"; then \
 		"$(CURDIR)/build/.venv/bin/python" "$(CURDIR)/scripts/bootstrap.py" "$@"; \
 	else \

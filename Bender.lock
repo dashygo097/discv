@@ -15,7 +15,7 @@ packages:
     dependencies:
     - dicflow
   dicflow:
-    revision: 096631b1e567cc2c08960eb754bcfa7f0789b919
+    revision: 5ed419155531a51dd4dad8043a0c78a8d92a785b
     version: null
     source:
       Git: https://github.com/dashygo097/dicflow.git

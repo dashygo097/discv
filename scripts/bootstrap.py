@@ -7,7 +7,15 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def project_lock(root):
+    with (root / ".project.lock").open("a") as mutex:
+        fcntl.flock(mutex, fcntl.LOCK_EX)
+        yield
 
 
 def remove_tree(path):
@@ -22,13 +30,11 @@ def clean(root, *, entire):
     build = root / "build"
     if build.is_symlink():
         raise RuntimeError("Refusing to clean a build/ symlink")
-    build.mkdir(exist_ok=True)
-    with (build / ".project.lock").open("a") as mutex:
-        fcntl.flock(mutex, fcntl.LOCK_EX)
+    with project_lock(root):
         if entire:
             remove_tree(build)
         else:
-            for directory in build.iterdir():
+            for directory in build.iterdir() if build.exists() else ():
                 if directory.is_dir() and (directory / ".flow-stage").is_file():
                     remove_tree(directory)
             remove_tree(build / "generated")
@@ -53,8 +59,9 @@ def bender(root, *arguments):
     }
     result = subprocess.run(
         ["bender", "--no-progress", "-d", str(root), *arguments],
-        capture_output=True,
-        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
         env=environment,
     )
     if result.returncode:
@@ -120,9 +127,7 @@ def main():
     if (root / "Bender.local").exists():
         raise RuntimeError("Bender.local overrides are not allowed in locked workflows")
     lock = root / "Bender.lock"
-    (root / "build").mkdir(exist_ok=True)
-    with (root / "build/.project.lock").open("a") as mutex:
-        fcntl.flock(mutex, fcntl.LOCK_EX)
+    with project_lock(root):
         previous = lock.read_bytes() if lock.exists() else None
         previous_manifest = manifest.read_bytes() if manifest.exists() else None
         try:
@@ -149,7 +154,8 @@ def main():
                     )
         except BaseException:
             if previous is None:
-                lock.unlink(missing_ok=True)
+                if lock.exists():
+                    lock.unlink()
             else:
                 lock.write_bytes(previous)
             raise
