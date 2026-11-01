@@ -1,9 +1,9 @@
 packages:
-  axi:
-    revision: b25063c69df71de6370708eaf4ff341aa0652321
+  amba:
+    revision: 492a1f3afcc5533b72d549715c0997cd2970f354
     version: null
     source:
-      Git: https://github.com/dashygo097/axi.git
+      Git: https://github.com/dashygo097/amba.git
     dependencies:
     - common_cells
     - dicflow
