@@ -2,21 +2,6 @@ schema_version = 7
 
 [design]
 top = ""
-sources = [
-  { include_dirs = ["rtl/pkgs", "rtl/core"], files = [
-    "rtl/pkgs/riscv_pkg.sv",
-    "rtl/pkgs/core_types_pkg.sv",
-    "rtl/core/**/*.sv",
-    "rtl/top/**/*.sv",
-  ] },
-  { target = "simulation", files = [
-    "sim/rtl/demu_dpi_pkg.sv",
-    "sim/rtl/demu_virt_imem_bfm.sv",
-    "sim/rtl/demu_virt_dmem_bfm.sv",
-    "sim/rtl/demu_retire_monitor.sv",
-    "sim/rtl/demu_sim_top.sv",
-  ] },
-]
 
 [architecture]
 generator = "scripts/project/riscv_config.py"
@@ -93,9 +78,23 @@ design_rules = { max_transition = 0.50, max_fanout = 16, max_capacitance = 0.20 
 # Enable a synthesis backend after filling its technology libraries.
 # [technology.tsmc28]
 # targets = ["asic", "tsmc28"]
+# [technology.tsmc28.libraries]
+# stdcell_setup = "/absolute/path/to/slow.db"
+# stdcell_hold = "/absolute/path/to/fast.db"
 # [technology.tsmc28.dc]
-# target_libraries = ["/absolute/path/to/slow.db"]
-# library_pairs = [{ max = "/absolute/path/to/slow.db", min = "/absolute/path/to/fast.db" }]
+# target_libraries = ["stdcell_setup"]
+# library_pairs = [{ max = "stdcell_setup", min = "stdcell_hold" }]
+# [technology.tsmc28.primetime]
+# wire_load_model = "ZeroWireload" # Must exist in the selected library.
+# wire_load_mode = "segmented"
+# [technology.tsmc28.timing.views.setup]
+# libraries = ["stdcell_setup"]
+# checks = ["setup"]
+# rc = "rcmax"
+# [technology.tsmc28.timing.views.hold]
+# libraries = ["stdcell_hold"]
+# checks = ["hold"]
+# rc = "rcmin"
 # [flow.synth.dc]
 # technologies = ["tsmc28"]
 # targets = ["synthesis"]
@@ -103,6 +102,17 @@ design_rules = { max_transition = 0.50, max_fanout = 16, max_capacitance = 0.20 
 # [flow.formal.formality]
 # technologies = ["tsmc28"]
 # requires = "synth.dc"
+# [flow.sta.primetime]
+# technologies = ["tsmc28"]
+# views = ["setup", "hold"]
+# mode = "functional"
+# [flow.sta.primetime.modes.functional]
+# case_analysis = { rst_n_i = 1 }
+# [flow.sta.primetime.prelayout]
+# requires = "synth.dc"
+# [flow.sta.primetime.postlayout]
+# requires = "extract.starrc" # Producer must publish netlist, constraints,
+#                         # parasitics.rcmax and parasitics.rcmin roles.
 
 [workflow]
 stages = ["lint", "sim"]
