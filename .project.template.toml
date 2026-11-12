@@ -8,14 +8,6 @@ generator = "scripts/project/riscv_config.py"
 march = "rv32i"
 reset_vector = 0x00000000
 
-[bender]
-version = "0.32.1"
-
-[build]
-jobs = 1
-technology = "generic"
-reproducible = false
-
 [technology.generic]
 targets = ["generic"]
 

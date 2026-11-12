@@ -8,7 +8,7 @@ packages:
     - common_cells
     - dicflow
   common_cells:
-    revision: 0014ab8647c017f6d0c66f66aa61488fa65c5262
+    revision: 19f5fa24eef7b5d6e21e417008b637f44ab413f8
     version: null
     source:
       Git: https://github.com/dashygo097/common_cells.git
