@@ -1,6 +1,8 @@
-module cpu_5stage_top
+`include "cc/registers.svh"
+
+module cpu_5stage_inorder
   import riscv_pkg::*;
-  import core_types_pkg::*;
+  import core_pkg::*;
 (
     input logic clk_i,
     input logic rst_n_i,
@@ -41,6 +43,80 @@ module cpu_5stage_top
   handshake_if #(.payload_t(dmem_rsp_t)) dmem_rsp ();
   valid_if #(.payload_t(retire_lane_t)) retire ();
 
+  handshake_if #(.payload_t(if_id_payload_t)) if_id_input ();
+  handshake_if #(.payload_t(if_id_payload_t)) if_id_output ();
+  handshake_if #(.payload_t(id_issue_payload_t)) id_issue_input ();
+  handshake_if #(.payload_t(id_issue_payload_t)) id_issue_output ();
+  handshake_if #(.payload_t(issue_ex_payload_t)) issue_ex_input ();
+  handshake_if #(.payload_t(issue_ex_payload_t)) issue_ex_output ();
+  handshake_if #(.payload_t(ex_mem_payload_t)) ex_mem_input ();
+  handshake_if #(.payload_t(ex_mem_payload_t)) ex_mem_output ();
+  handshake_if #(.payload_t(mem_wb_payload_t)) mem_wb_input ();
+  valid_if #(.payload_t(mem_wb_payload_t)) mem_wb_output ();
+
+  typedef enum logic [1:0] {
+    FETCH_RESET   = 2'b00,
+    FETCH_READY   = 2'b01,
+    FETCH_WAIT    = 2'b10,
+    FETCH_DISCARD = 2'b11
+  } fetch_state_e;
+
+  localparam addr_t ResetVector = addr_t'(arch_pkg::ARCH.reset_vector);
+  localparam addr_t InstrBytes  = addr_t'(ILEN / 8);
+
+  addr_t fetch_pc_d, fetch_pc_r;
+  addr_t fetch_request_pc_d, fetch_request_pc_r;
+  fetch_state_e fetch_state_d, fetch_state_r;
+  logic            fetch_request_fire;
+  logic            fetch_response_fire;
+
+  logic            redirect_valid;
+  addr_t           redirect_pc;
+
+  reg_addr_t       decode_rs1;
+  reg_addr_t       decode_rs2;
+  reg_addr_t       decode_rd;
+  decode_ctrl_t    decode_ctrl;
+  decode_ctrl_t    decode_effective_ctrl;
+  word_t           decode_immediate;
+
+  word_t           rs1_data;
+  word_t           rs2_data;
+
+  logic            issue_hazard;
+  logic            issue_ex_hazard;
+  logic            ex_mem_hazard;
+  logic            mem_wb_hazard;
+  logic            issue_serialize;
+
+  word_t           execute_operand_a;
+  word_t           execute_operand_b;
+  word_t           execute_result;
+  logic            execute_redirect;
+
+  word_t           memory_write_data;
+  byte_enable_t    memory_write_strb;
+  word_t           memory_load_data;
+  logic            memory_misaligned;
+  logic            memory_access;
+  logic            memory_request;
+  logic            memory_illegal;
+  logic            memory_request_sent_r;
+  logic            memory_request_fire;
+  logic            memory_response_fire;
+  word_t           memory_result;
+
+  logic            regfile_write;
+  logic            writeback_valid_r;
+  mem_wb_payload_t writeback_payload_r;
+
+  function automatic logic depends_on(input id_issue_payload_t consumer, input logic producer_valid,
+                                      input logic producer_write, input reg_addr_t destination);
+    return producer_valid && producer_write &&
+        ((consumer.ctrl.rs1_read && consumer.rs1 != '0 && consumer.rs1 == destination) ||
+         (consumer.ctrl.rs2_read && consumer.rs2 != '0 && consumer.rs2 == destination));
+  endfunction
+
   always_comb begin
     imem_rsp.valid   = imem_rsp_valid_i;
     imem_rsp.payload = '{data: imem_rsp_data_i, error: imem_rsp_error_i};
@@ -70,119 +146,15 @@ module cpu_5stage_top
     retire_illegal_o = retire.payload.illegal;
   end
 
-  handshake_if #(.payload_t(if_id_payload_t)) if_id_input ();
-  handshake_if #(.payload_t(if_id_payload_t)) if_id_output ();
-  handshake_if #(.payload_t(id_issue_payload_t)) id_issue_input ();
-  handshake_if #(.payload_t(id_issue_payload_t)) id_issue_output ();
-  handshake_if #(.payload_t(issue_ex_payload_t)) issue_ex_input ();
-  handshake_if #(.payload_t(issue_ex_payload_t)) issue_ex_output ();
-  handshake_if #(.payload_t(ex_mem_payload_t)) ex_mem_input ();
-  handshake_if #(.payload_t(ex_mem_payload_t)) ex_mem_output ();
-  handshake_if #(.payload_t(mem_wb_payload_t)) mem_wb_input ();
-  handshake_if #(.payload_t(mem_wb_payload_t)) mem_wb_output ();
-
-  typedef enum logic [1:0] {
-    FETCH_RESET   = 2'b00,
-    FETCH_READY   = 2'b01,
-    FETCH_WAIT    = 2'b10,
-    FETCH_DISCARD = 2'b11
-  } fetch_state_e;
-
-  addr_t        fetch_pc_r;
-  addr_t        fetch_request_pc_r;
-  fetch_state_e fetch_state_r;
-  fetch_state_e next_fetch_state;
-  logic         fetch_request_fire;
-  logic         fetch_response_fire;
-
-  logic         redirect_valid;
-  addr_t        redirect_pc;
-
-  reg_addr_t    decode_rs1;
-  reg_addr_t    decode_rs2;
-  reg_addr_t    decode_rd;
-  decode_ctrl_t decode_ctrl;
-  word_t        decode_immediate;
-
-  word_t        rs1_data;
-  word_t        rs2_data;
-
-  logic         issue_hazard;
-  logic         issue_serialize;
-
-  word_t        execute_operand_a;
-  word_t        execute_operand_b;
-  word_t        execute_result;
-  logic         execute_redirect;
-
-  word_t        memory_write_data;
-  byte_enable_t memory_write_strb;
-  word_t        memory_load_data;
-  logic         memory_misaligned;
-  logic         memory_access;
-  logic         memory_request;
-  logic         memory_request_sent_r;
-  logic         memory_request_fire;
-  logic         memory_response_fire;
-  word_t        memory_result;
-
-  logic         regfile_write;
-
-  function automatic logic depends_on(input logic read_enable, input reg_addr_t source,
-                                      input logic producer_valid, input logic producer_write,
-                                      input reg_addr_t destination);
-    return read_enable && producer_valid && producer_write &&
-        (source != '0) && (source == destination);
-  endfunction
-
-  pipe_stage #(
+  // Fetch: one outstanding instruction request; drain redirected responses.
+  flushable_pipe #(
       .payload_t(if_id_payload_t)
   ) u_if_id (
       .clk_i,
       .rst_n_i,
       .flush_i(redirect_valid),
-      .upstream(if_id_input),
-      .downstream(if_id_output)
-  );
-
-  pipe_stage #(
-      .payload_t(id_issue_payload_t)
-  ) u_id_issue (
-      .clk_i,
-      .rst_n_i,
-      .flush_i(redirect_valid),
-      .upstream(id_issue_input),
-      .downstream(id_issue_output)
-  );
-
-  pipe_stage #(
-      .payload_t(issue_ex_payload_t)
-  ) u_issue_ex (
-      .clk_i,
-      .rst_n_i,
-      .flush_i(1'b0),
-      .upstream(issue_ex_input),
-      .downstream(issue_ex_output)
-  );
-
-  pipe_stage #(
-      .payload_t(ex_mem_payload_t)
-  ) u_ex_mem (
-      .clk_i,
-      .rst_n_i,
-      .flush_i(1'b0),
-      .upstream(ex_mem_input),
-      .downstream(ex_mem_output)
-  );
-
-  pipe_stage #(
-      .payload_t(mem_wb_payload_t)
-  ) u_mem_wb (
-      .clk_i,
-      .rst_n_i,
-      .flush_i(1'b0),
-      .upstream(mem_wb_input),
-      .downstream(mem_wb_output)
+      .in(if_id_input),
+      .out(if_id_output)
   );
 
   always_comb begin
@@ -204,77 +176,63 @@ module cpu_5stage_top
   end
 
   always_comb begin
+    fetch_state_d = fetch_state_r;
+    fetch_pc_d = fetch_pc_r;
+    fetch_request_pc_d = fetch_request_pc_r;
+
     unique case (fetch_state_r)
-      FETCH_RESET: next_fetch_state = FETCH_READY;
+      FETCH_RESET: begin
+        fetch_state_d = FETCH_READY;
+        fetch_pc_d = ResetVector;
+        fetch_request_pc_d = '0;
+      end
 
       FETCH_READY: begin
-        if (fetch_request_fire) begin
-          next_fetch_state = FETCH_WAIT;
-        end else begin
-          next_fetch_state = FETCH_READY;
+        if (redirect_valid) begin
+          fetch_pc_d = redirect_pc;
+        end else if (fetch_request_fire) begin
+          fetch_state_d = FETCH_WAIT;
+          fetch_pc_d = fetch_pc_r + InstrBytes;
+          fetch_request_pc_d = fetch_pc_r;
         end
       end
 
       FETCH_WAIT: begin
         if (redirect_valid) begin
-          next_fetch_state = FETCH_DISCARD;
+          fetch_state_d = FETCH_DISCARD;
+          fetch_pc_d = redirect_pc;
         end else if (fetch_response_fire) begin
-          next_fetch_state = FETCH_READY;
-        end else begin
-          next_fetch_state = FETCH_WAIT;
+          fetch_state_d = FETCH_READY;
         end
       end
 
       FETCH_DISCARD: begin
-        if (fetch_response_fire) begin
-          next_fetch_state = FETCH_READY;
-        end else begin
-          next_fetch_state = FETCH_DISCARD;
-        end
+        if (redirect_valid) fetch_pc_d = redirect_pc;
+        if (fetch_response_fire) fetch_state_d = FETCH_READY;
       end
 
-      default: next_fetch_state = FETCH_RESET;
+      default: begin
+        fetch_state_d = FETCH_RESET;
+        fetch_pc_d = ResetVector;
+        fetch_request_pc_d = '0;
+      end
     endcase
   end
 
-  always_ff @(posedge clk_i or negedge rst_n_i) begin
-    if (!rst_n_i) begin
-      fetch_pc_r <= addr_t'(arch_pkg::ARCH.reset_vector);
-      fetch_request_pc_r <= '0;
-      fetch_state_r <= FETCH_RESET;
-    end else begin
-      fetch_state_r <= next_fetch_state;
+  `REG_ARSTN(fetch_state_r, fetch_state_d, FETCH_RESET)
+  `REG_ARSTN(fetch_pc_r, fetch_pc_d, ResetVector)
+  `REG_ARSTN(fetch_request_pc_r, fetch_request_pc_d, '0)
 
-      unique case (fetch_state_r)
-        FETCH_READY: begin
-          if (redirect_valid) begin
-            fetch_pc_r <= redirect_pc;
-          end else if (fetch_request_fire) begin
-            fetch_pc_r <= fetch_pc_r + addr_t'(ILEN / 8);
-            fetch_request_pc_r <= fetch_pc_r;
-          end
-        end
-
-        FETCH_WAIT: begin
-          if (redirect_valid) begin
-            fetch_pc_r <= redirect_pc;
-          end
-        end
-
-        FETCH_DISCARD: begin
-          if (redirect_valid) begin
-            fetch_pc_r <= redirect_pc;
-          end
-
-        end
-
-        default: begin
-          fetch_pc_r <= addr_t'(arch_pkg::ARCH.reset_vector);
-          fetch_request_pc_r <= '0;
-        end
-      endcase
-    end
-  end
+  // Decode: preserve fetch faults as illegal instructions.
+  flushable_pipe #(
+      .payload_t(id_issue_payload_t)
+  ) u_id_issue (
+      .clk_i,
+      .rst_n_i,
+      .flush_i(redirect_valid),
+      .in(id_issue_input),
+      .out(id_issue_output)
+  );
 
   decoder u_decoder (
       .instr_i(if_id_output.payload.instr),
@@ -291,6 +249,11 @@ module cpu_5stage_top
   );
 
   always_comb begin
+    decode_effective_ctrl = if_id_output.payload.error ? make_decode_ctrl(
+      .alu_op(ALU_NONE),
+      .illegal(1'b1)
+    ) : decode_ctrl;
+
     id_issue_input.valid = if_id_output.valid;
     id_issue_input.payload = '{
         pc: if_id_output.payload.pc,
@@ -299,15 +262,20 @@ module cpu_5stage_top
         rs2: decode_rs2,
         rd: decode_rd,
         immediate: decode_immediate,
-        ctrl:
-        if_id_output.payload.error
-        ?
-        make_decode_ctrl(.alu_op(ALU_NONE), .illegal(1'b1))
-        :
-        decode_ctrl
+        ctrl: decode_effective_ctrl
     };
     if_id_output.ready = id_issue_input.ready;
   end
+
+  // Issue: stall on RAW dependencies and drain older instructions for serialization.
+  pipe #(
+      .payload_t(issue_ex_payload_t)
+  ) u_issue_ex (
+      .clk_i,
+      .rst_n_i,
+      .in (issue_ex_input),
+      .out(issue_ex_output)
+  );
 
   regfile u_regfile (
       .clk_i,
@@ -321,43 +289,25 @@ module cpu_5stage_top
   );
 
   always_comb begin
-    issue_hazard = depends_on(
-      id_issue_output.payload.ctrl.rs1_read,
-      id_issue_output.payload.rs1,
+    issue_ex_hazard = depends_on(
+      id_issue_output.payload,
       issue_ex_output.valid,
       issue_ex_output.payload.ctrl.reg_write,
       issue_ex_output.payload.rd
-    ) || depends_on(
-      id_issue_output.payload.ctrl.rs2_read,
-      id_issue_output.payload.rs2,
-      issue_ex_output.valid,
-      issue_ex_output.payload.ctrl.reg_write,
-      issue_ex_output.payload.rd
-    ) || depends_on(
-      id_issue_output.payload.ctrl.rs1_read,
-      id_issue_output.payload.rs1,
+    );
+    ex_mem_hazard = depends_on(
+      id_issue_output.payload,
       ex_mem_output.valid,
       ex_mem_output.payload.reg_write,
       ex_mem_output.payload.rd
-    ) || depends_on(
-      id_issue_output.payload.ctrl.rs2_read,
-      id_issue_output.payload.rs2,
-      ex_mem_output.valid,
-      ex_mem_output.payload.reg_write,
-      ex_mem_output.payload.rd
-    ) || depends_on(
-      id_issue_output.payload.ctrl.rs1_read,
-      id_issue_output.payload.rs1,
-      mem_wb_output.valid,
-      mem_wb_output.payload.reg_write,
-      mem_wb_output.payload.rd
-    ) || depends_on(
-      id_issue_output.payload.ctrl.rs2_read,
-      id_issue_output.payload.rs2,
+    );
+    mem_wb_hazard = depends_on(
+      id_issue_output.payload,
       mem_wb_output.valid,
       mem_wb_output.payload.reg_write,
       mem_wb_output.payload.rd
     );
+    issue_hazard = issue_ex_hazard || ex_mem_hazard || mem_wb_hazard;
 
     issue_serialize = id_issue_output.payload.ctrl.serialize &&
         (issue_ex_output.valid || ex_mem_output.valid || mem_wb_output.valid);
@@ -374,6 +324,16 @@ module cpu_5stage_top
     };
     id_issue_output.ready = issue_ex_input.ready && !issue_hazard && !issue_serialize;
   end
+
+  // Execute: redirect only when the instruction advances into memory.
+  pipe #(
+      .payload_t(ex_mem_payload_t)
+  ) u_ex_mem (
+      .clk_i,
+      .rst_n_i,
+      .in (ex_mem_input),
+      .out(ex_mem_output)
+  );
 
   always_comb begin
     unique case (issue_ex_output.payload.ctrl.operand_a)
@@ -432,6 +392,7 @@ module cpu_5stage_top
     issue_ex_output.ready = ex_mem_input.ready;
   end
 
+  // Memory: keep one data-memory transaction outstanding until its response.
   lsu u_lsu (
       .byte_offset_i(ex_mem_output.payload.result[1:0]),
       .store_data_i(ex_mem_output.payload.store_data),
@@ -463,9 +424,13 @@ module cpu_5stage_top
     unique case (ex_mem_output.payload.result_source)
       RESULT_ALU: memory_result = ex_mem_output.payload.result;
       RESULT_MEM: memory_result = memory_load_data;
-      RESULT_PC_STEP: memory_result = ex_mem_output.payload.pc + word_t'(ILEN / 8);
+      RESULT_PC_STEP: memory_result = ex_mem_output.payload.pc + InstrBytes;
       default: memory_result = '0;
     endcase
+
+    memory_illegal = ex_mem_output.payload.illegal ||
+        (memory_access && memory_misaligned) ||
+        (memory_request_sent_r && dmem_rsp.valid && dmem_rsp.payload.error);
 
     mem_wb_input.payload = '{
         pc: ex_mem_output.payload.pc,
@@ -473,13 +438,7 @@ module cpu_5stage_top
         rd: ex_mem_output.payload.rd,
         result: memory_result,
         reg_write: ex_mem_output.payload.reg_write,
-        illegal:
-        ex_mem_output.payload.illegal
-        || (
-        memory_access && memory_misaligned
-        ) || (
-        memory_request_sent_r && dmem_rsp.valid && dmem_rsp.payload.error
-        )
+        illegal: memory_illegal
     };
 
     if (ex_mem_output.valid) begin
@@ -497,18 +456,15 @@ module cpu_5stage_top
     memory_response_fire = dmem_rsp.valid && dmem_rsp.ready;
   end
 
-  always_ff @(posedge clk_i or negedge rst_n_i) begin
-    if (!rst_n_i) begin
-      memory_request_sent_r <= 1'b0;
-    end else if (memory_response_fire) begin
-      memory_request_sent_r <= 1'b0;
-    end else if (memory_request_fire) begin
-      memory_request_sent_r <= 1'b1;
-    end
-  end
+  `REG_CE_CLR_ARSTN(memory_request_sent_r, 1'b1, memory_request_fire, memory_response_fire, 1'b0)
+
+  `REG_ARSTN(writeback_valid_r, mem_wb_input.valid, 1'b0)
+  `REG_CE(writeback_payload_r, mem_wb_input.payload, mem_wb_input.valid)
 
   always_comb begin
-    mem_wb_output.ready = 1'b1;
+    mem_wb_input.ready = 1'b1;
+    mem_wb_output.valid = writeback_valid_r;
+    mem_wb_output.payload = writeback_payload_r;
 
     regfile_write = mem_wb_output.valid && mem_wb_output.payload.reg_write &&
         !mem_wb_output.payload.illegal;

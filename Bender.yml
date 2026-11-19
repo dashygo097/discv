@@ -9,14 +9,10 @@ dependencies:
   dicflow: { git: "https://github.com/dashygo097/dicflow.git", rev: main }
 
 sources:
-  - include_dirs:
-      - rtl/pkgs
-      - rtl/core
-    files:
-      - rtl/pkgs/riscv_pkg.sv
-      - rtl/pkgs/core_types_pkg.sv
-      - rtl/core/**/*.sv
-      - rtl/top/**/*.sv
+  - rtl/pkgs/riscv_pkg.sv
+  - rtl/pkgs/core_pkg.sv
+  - rtl/core/**/*.sv
+  - rtl/top/**/*.sv
   - target: simulation
     files:
       - sim/rtl/demu_dpi_pkg.sv

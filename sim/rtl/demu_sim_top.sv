@@ -1,5 +1,5 @@
 module demu_sim_top
-  import core_types_pkg::*;
+  import core_pkg::*;
   import demu_platform_pkg::*;
 (
     input logic clk_i,

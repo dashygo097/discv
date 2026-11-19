@@ -1,6 +1,6 @@
 module lsu
   import riscv_pkg::*;
-  import core_types_pkg::*;
+  import core_pkg::*;
 (
     input logic         [1:0] byte_offset_i,
     input word_t              store_data_i,

@@ -1,6 +1,6 @@
 module decoder
   import riscv_pkg::*;
-  import core_types_pkg::*;
+  import core_pkg::*;
 (
     input  instr_t       instr_i,
     output reg_addr_t    rs1_o,

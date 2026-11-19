@@ -1,6 +1,6 @@
 module immediate_gen
   import riscv_pkg::*;
-  import core_types_pkg::*;
+  import core_pkg::*;
 (
     input  logic           [ILEN-1:7] instr_i,
     input  immediate_sel_e            sel_i,

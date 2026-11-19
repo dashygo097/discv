@@ -1,4 +1,4 @@
-package core_types_pkg;
+package core_pkg;
   import riscv_pkg::*;
 
   typedef struct packed {addr_t addr;} imem_req_t;

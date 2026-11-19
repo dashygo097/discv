@@ -1,5 +1,5 @@
 module demu_virt_imem_bfm
-  import core_types_pkg::*;
+  import core_pkg::*;
   import demu_dpi_pkg::*;
 #(
     parameter int unsigned PORT

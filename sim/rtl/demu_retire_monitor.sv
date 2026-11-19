@@ -1,5 +1,5 @@
 module demu_retire_monitor
-  import core_types_pkg::*;
+  import core_pkg::*;
   import demu_dpi_pkg::*;
 (
     input logic clk_i,

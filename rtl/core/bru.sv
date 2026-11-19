@@ -1,6 +1,6 @@
 module bru
   import riscv_pkg::*;
-  import core_types_pkg::*;
+  import core_pkg::*;
 (
     input word_t      lhs_i,
     input word_t      rhs_i,
