@@ -6,7 +6,7 @@ package core_pkg;
   typedef struct packed {
     instr_t data;
     logic   error;
-  } imem_rsp_t;
+  } imem_resp_t;
 
   typedef struct packed {
     addr_t        addr;
@@ -18,7 +18,7 @@ package core_pkg;
   typedef struct packed {
     word_t data;
     logic  error;
-  } dmem_rsp_t;
+  } dmem_resp_t;
 
   typedef struct packed {
     addr_t     pc;

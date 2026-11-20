@@ -11,10 +11,10 @@ module cpu_5stage_inorder
     input  logic  imem_req_ready_i,
     output addr_t imem_req_addr_o,
 
-    input  logic   imem_rsp_valid_i,
-    output logic   imem_rsp_ready_o,
-    input  instr_t imem_rsp_data_i,
-    input  logic   imem_rsp_error_i,
+    input  logic   imem_resp_valid_i,
+    output logic   imem_resp_ready_o,
+    input  instr_t imem_resp_data_i,
+    input  logic   imem_resp_error_i,
 
     output logic         dmem_req_valid_o,
     input  logic         dmem_req_ready_i,
@@ -23,10 +23,10 @@ module cpu_5stage_inorder
     output word_t        dmem_req_data_o,
     output byte_enable_t dmem_req_strb_o,
 
-    input  logic  dmem_rsp_valid_i,
-    output logic  dmem_rsp_ready_o,
-    input  word_t dmem_rsp_data_i,
-    input  logic  dmem_rsp_error_i,
+    input  logic  dmem_resp_valid_i,
+    output logic  dmem_resp_ready_o,
+    input  word_t dmem_resp_data_i,
+    input  logic  dmem_resp_error_i,
 
     output logic      retire_valid_o,
     output addr_t     retire_pc_o,
@@ -38,12 +38,11 @@ module cpu_5stage_inorder
 );
 
   handshake_if #(.payload_t(imem_req_t)) imem_req ();
-  handshake_if #(.payload_t(imem_rsp_t)) imem_rsp ();
+  handshake_if #(.payload_t(imem_resp_t)) imem_resp ();
   handshake_if #(.payload_t(dmem_req_t)) dmem_req ();
-  handshake_if #(.payload_t(dmem_rsp_t)) dmem_rsp ();
+  handshake_if #(.payload_t(dmem_resp_t)) dmem_resp ();
   valid_if #(.payload_t(retire_lane_t)) retire ();
 
-  handshake_if #(.payload_t(if_id_payload_t)) if_id_in ();
   handshake_if #(.payload_t(if_id_payload_t)) if_id_out ();
   handshake_if #(.payload_t(id_issue_payload_t)) id_issue_in ();
   handshake_if #(.payload_t(id_issue_payload_t)) id_issue_out ();
@@ -54,21 +53,7 @@ module cpu_5stage_inorder
   handshake_if #(.payload_t(mem_wb_payload_t)) mem_wb_in ();
   valid_if #(.payload_t(mem_wb_payload_t)) mem_wb_out ();
 
-  typedef enum logic [1:0] {
-    FETCH_RESET   = 2'b00,
-    FETCH_READY   = 2'b01,
-    FETCH_WAIT    = 2'b10,
-    FETCH_DISCARD = 2'b11
-  } fetch_state_e;
-
-  localparam addr_t ResetVector = addr_t'(arch_pkg::ARCH.reset_vector);
-  localparam addr_t InstrBytes  = addr_t'(ILEN / 8);
-
-  addr_t fetch_pc_d, fetch_pc_r;
-  addr_t fetch_request_pc_d, fetch_request_pc_r;
-  fetch_state_e fetch_state_d, fetch_state_r;
-  logic            fetch_request_fire;
-  logic            fetch_response_fire;
+  localparam addr_t InstrBytes = addr_t'(ILEN / 8);
 
   logic            redirect_valid;
   addr_t           redirect_pc;
@@ -99,11 +84,11 @@ module cpu_5stage_inorder
   word_t           memory_load_data;
   logic            memory_misaligned;
   logic            memory_access;
-  logic            memory_request;
+  logic            memory_req;
   logic            memory_illegal;
-  logic            memory_request_sent_r;
-  logic            memory_request_fire;
-  logic            memory_response_fire;
+  logic            memory_req_sent_r;
+  logic            memory_req_fire;
+  logic            memory_resp_fire;
   word_t           memory_result;
 
   logic            regfile_write;
@@ -118,133 +103,66 @@ module cpu_5stage_inorder
   endfunction
 
   always_comb begin
-    imem_rsp.valid   = imem_rsp_valid_i;
-    imem_rsp.payload = '{data: imem_rsp_data_i, error: imem_rsp_error_i};
+    imem_resp.valid   = imem_resp_valid_i;
+    imem_resp.payload = '{data: imem_resp_data_i, error: imem_resp_error_i};
 
-    dmem_rsp.valid   = dmem_rsp_valid_i;
-    dmem_rsp.payload = '{data: dmem_rsp_data_i, error: dmem_rsp_error_i};
+    dmem_resp.valid   = dmem_resp_valid_i;
+    dmem_resp.payload = '{data: dmem_resp_data_i, error: dmem_resp_error_i};
 
-    imem_req.ready   = imem_req_ready_i;
-    imem_req_valid_o = imem_req.valid;
-    imem_req_addr_o  = imem_req.payload.addr;
-    imem_rsp_ready_o = imem_rsp.ready;
+    imem_req.ready    = imem_req_ready_i;
+    imem_req_valid_o  = imem_req.valid;
+    imem_req_addr_o   = imem_req.payload.addr;
+    imem_resp_ready_o = imem_resp.ready;
 
-    dmem_req.ready   = dmem_req_ready_i;
-    dmem_req_valid_o = dmem_req.valid;
-    dmem_req_addr_o  = dmem_req.payload.addr;
-    dmem_req_write_o = dmem_req.payload.write;
-    dmem_req_data_o  = dmem_req.payload.data;
-    dmem_req_strb_o  = dmem_req.payload.strb;
-    dmem_rsp_ready_o = dmem_rsp.ready;
+    dmem_req.ready    = dmem_req_ready_i;
+    dmem_req_valid_o  = dmem_req.valid;
+    dmem_req_addr_o   = dmem_req.payload.addr;
+    dmem_req_write_o  = dmem_req.payload.write;
+    dmem_req_data_o   = dmem_req.payload.data;
+    dmem_req_strb_o   = dmem_req.payload.strb;
+    dmem_resp_ready_o = dmem_resp.ready;
 
-    retire_valid_o   = retire.valid;
-    retire_pc_o      = retire.payload.pc;
-    retire_instr_o   = retire.payload.instr;
-    retire_rd_o      = retire.payload.rd;
-    retire_data_o    = retire.payload.data;
-    retire_write_o   = retire.payload.write;
-    retire_illegal_o = retire.payload.illegal;
+    retire_valid_o    = retire.valid;
+    retire_pc_o       = retire.payload.pc;
+    retire_instr_o    = retire.payload.instr;
+    retire_rd_o       = retire.payload.rd;
+    retire_data_o     = retire.payload.data;
+    retire_write_o    = retire.payload.write;
+    retire_illegal_o  = retire.payload.illegal;
   end
 
-  // Fetch: one outstanding instruction request; drain redirected responses.
-  flushable_pipe #(
-      .payload_t(if_id_payload_t)
-  ) u_if_id (
-      .clk_i,
-      .rst_n_i,
-      .flush_i(redirect_valid),
-      .in(if_id_in),
-      .out(if_id_out)
+  ifu u_ifu (
+      .clk_i           (clk_i),
+      .rst_n_i         (rst_n_i),
+      .redirect_valid_i(redirect_valid),
+      .redirect_pc_i   (redirect_pc),
+      .imem_req        (imem_req),
+      .imem_resp       (imem_resp),
+      .if_id           (if_id_out)
   );
 
-  always_comb begin
-    imem_req.valid = (fetch_state_r == FETCH_READY) && !redirect_valid;
-    imem_req.payload = '{addr: fetch_pc_r};
-
-    if_id_in.valid = (fetch_state_r == FETCH_WAIT) && imem_rsp.valid;
-    if_id_in.payload = '{
-        pc: fetch_request_pc_r,
-        instr: imem_rsp.payload.data,
-        error: imem_rsp.payload.error
-    };
-
-    imem_rsp.ready = (fetch_state_r == FETCH_DISCARD) ||
-        ((fetch_state_r == FETCH_WAIT) && if_id_in.ready);
-
-    fetch_request_fire = imem_req.valid && imem_req.ready;
-    fetch_response_fire = imem_rsp.valid && imem_rsp.ready;
-  end
-
-  always_comb begin
-    fetch_state_d = fetch_state_r;
-    fetch_pc_d = fetch_pc_r;
-    fetch_request_pc_d = fetch_request_pc_r;
-
-    unique case (fetch_state_r)
-      FETCH_RESET: begin
-        fetch_state_d = FETCH_READY;
-        fetch_pc_d = ResetVector;
-        fetch_request_pc_d = '0;
-      end
-
-      FETCH_READY: begin
-        if (redirect_valid) begin
-          fetch_pc_d = redirect_pc;
-        end else if (fetch_request_fire) begin
-          fetch_state_d = FETCH_WAIT;
-          fetch_pc_d = fetch_pc_r + InstrBytes;
-          fetch_request_pc_d = fetch_pc_r;
-        end
-      end
-
-      FETCH_WAIT: begin
-        if (redirect_valid) begin
-          fetch_state_d = FETCH_DISCARD;
-          fetch_pc_d = redirect_pc;
-        end else if (fetch_response_fire) begin
-          fetch_state_d = FETCH_READY;
-        end
-      end
-
-      FETCH_DISCARD: begin
-        if (redirect_valid) fetch_pc_d = redirect_pc;
-        if (fetch_response_fire) fetch_state_d = FETCH_READY;
-      end
-
-      default: begin
-        fetch_state_d = FETCH_RESET;
-        fetch_pc_d = ResetVector;
-        fetch_request_pc_d = '0;
-      end
-    endcase
-  end
-
-  `REG_ARSTN(fetch_state_r, fetch_state_d, FETCH_RESET)
-  `REG_ARSTN(fetch_pc_r, fetch_pc_d, ResetVector)
-  `REG_ARSTN(fetch_request_pc_r, fetch_request_pc_d, '0)
-
-  // Decode: preserve fetch faults as illegal instructions.
+  // Decode
   flushable_pipe #(
       .payload_t(id_issue_payload_t)
   ) u_id_issue (
-      .clk_i,
-      .rst_n_i,
+      .clk_i  (clk_i),
+      .rst_n_i(rst_n_i),
       .flush_i(redirect_valid),
-      .in(id_issue_in),
-      .out(id_issue_out)
+      .in     (id_issue_in),
+      .out    (id_issue_out)
   );
 
   decoder u_decoder (
       .instr_i(if_id_out.payload.instr),
-      .rs1_o(decode_rs1),
-      .rs2_o(decode_rs2),
-      .rd_o(decode_rd),
-      .ctrl_o(decode_ctrl)
+      .rs1_o  (decode_rs1),
+      .rs2_o  (decode_rs2),
+      .rd_o   (decode_rd),
+      .ctrl_o (decode_ctrl)
   );
 
   immediate_gen u_immediate_gen (
-      .instr_i(if_id_out.payload.instr[ILEN-1:7]),
-      .sel_i(decode_ctrl.immediate),
+      .instr_i    (if_id_out.payload.instr[ILEN-1:7]),
+      .sel_i      (decode_ctrl.immediate),
       .immediate_o(decode_immediate)
   );
 
@@ -267,18 +185,18 @@ module cpu_5stage_inorder
     if_id_out.ready = id_issue_in.ready;
   end
 
-  // Issue: stall on RAW dependencies and drain older instructions for serialization.
+  // Issue
   pipe #(
       .payload_t(issue_ex_payload_t)
   ) u_issue_ex (
-      .clk_i,
-      .rst_n_i,
-      .in (issue_ex_in),
-      .out(issue_ex_out)
+      .clk_i  (clk_i),
+      .rst_n_i(rst_n_i),
+      .in     (issue_ex_in),
+      .out    (issue_ex_out)
   );
 
   regfile u_regfile (
-      .clk_i,
+      .clk_i     (clk_i),
       .rs1_addr_i(id_issue_out.payload.rs1),
       .rs2_addr_i(id_issue_out.payload.rs2),
       .rs1_data_o(rs1_data),
@@ -317,14 +235,14 @@ module cpu_5stage_inorder
     id_issue_out.ready = issue_ex_in.ready && !issue_hazard && !issue_serialize;
   end
 
-  // Execute: redirect only when the instruction advances into memory.
+  // Execute
   pipe #(
       .payload_t(ex_mem_payload_t)
   ) u_ex_mem (
-      .clk_i,
-      .rst_n_i,
-      .in (ex_mem_in),
-      .out(ex_mem_out)
+      .clk_i  (clk_i),
+      .rst_n_i(rst_n_i),
+      .in     (ex_mem_in),
+      .out    (ex_mem_out)
   );
 
   always_comb begin
@@ -342,9 +260,9 @@ module cpu_5stage_inorder
   end
 
   alu u_alu (
-      .lhs_i(execute_operand_a),
-      .rhs_i(execute_operand_b),
-      .op_i(issue_ex_out.payload.ctrl.alu_op),
+      .lhs_i   (execute_operand_a),
+      .rhs_i   (execute_operand_b),
+      .op_i    (issue_ex_out.payload.ctrl.alu_op),
       .result_o(execute_result)
   );
 
@@ -353,9 +271,8 @@ module cpu_5stage_inorder
       .rhs_i(issue_ex_out.payload.rs2_data),
       .branch_op_i(issue_ex_out.payload.ctrl.branch_op),
       .jump_i(issue_ex_out.payload.ctrl.jump),
-      .indirect_i(
-          issue_ex_out.payload.ctrl.jump &&
-          (issue_ex_out.payload.ctrl.operand_a == OPERAND_A_RS1)
+      .indirect_i(issue_ex_out.payload.ctrl.jump &&
+        (issue_ex_out.payload.ctrl.operand_a == OPERAND_A_RS1)
       ),
       .target_i(execute_result),
       .taken_o(execute_redirect),
@@ -384,24 +301,24 @@ module cpu_5stage_inorder
     issue_ex_out.ready = ex_mem_in.ready;
   end
 
-  // Memory: keep one data-memory transaction outstanding until its response.
+  // Memory
   lsu u_lsu (
       .byte_offset_i(ex_mem_out.payload.result[1:0]),
-      .store_data_i(ex_mem_out.payload.store_data),
-      .read_data_i(dmem_rsp.payload.data),
-      .size_i(ex_mem_out.payload.memory_size),
-      .unsigned_i(ex_mem_out.payload.memory_unsigned),
-      .write_data_o(memory_write_data),
-      .write_strb_o(memory_write_strb),
-      .load_data_o(memory_load_data),
-      .misaligned_o(memory_misaligned)
+      .store_data_i (ex_mem_out.payload.store_data),
+      .read_data_i  (dmem_resp.payload.data),
+      .size_i       (ex_mem_out.payload.memory_size),
+      .unsigned_i   (ex_mem_out.payload.memory_unsigned),
+      .write_data_o (memory_write_data),
+      .write_strb_o (memory_write_strb),
+      .load_data_o  (memory_load_data),
+      .misaligned_o (memory_misaligned)
   );
 
   always_comb begin
     memory_access = ex_mem_out.payload.memory_read || ex_mem_out.payload.memory_write;
-    memory_request = memory_access && !ex_mem_out.payload.illegal && !memory_misaligned;
+    memory_req = memory_access && !ex_mem_out.payload.illegal && !memory_misaligned;
 
-    dmem_req.valid = ex_mem_out.valid && memory_request && !memory_request_sent_r;
+    dmem_req.valid = ex_mem_out.valid && memory_req && !memory_req_sent_r;
     dmem_req.payload = '{
         addr: ex_mem_out.payload.result,
         write: ex_mem_out.payload.memory_write,
@@ -409,7 +326,7 @@ module cpu_5stage_inorder
         strb: memory_write_strb
     };
 
-    dmem_rsp.ready = 1'b0;
+    dmem_resp.ready = 1'b0;
     ex_mem_out.ready = 1'b0;
     mem_wb_in.valid = 1'b0;
 
@@ -422,7 +339,7 @@ module cpu_5stage_inorder
 
     memory_illegal = ex_mem_out.payload.illegal ||
         (memory_access && memory_misaligned) ||
-        (memory_request_sent_r && dmem_rsp.valid && dmem_rsp.payload.error);
+        (memory_req_sent_r && dmem_resp.valid && dmem_resp.payload.error);
 
     mem_wb_in.payload = '{
         pc: ex_mem_out.payload.pc,
@@ -434,21 +351,21 @@ module cpu_5stage_inorder
     };
 
     if (ex_mem_out.valid) begin
-      if (!memory_request) begin
+      if (!memory_req) begin
         mem_wb_in.valid  = 1'b1;
         ex_mem_out.ready = mem_wb_in.ready;
-      end else if (memory_request_sent_r) begin
-        mem_wb_in.valid  = dmem_rsp.valid;
-        dmem_rsp.ready   = mem_wb_in.ready;
-        ex_mem_out.ready = dmem_rsp.valid && mem_wb_in.ready;
+      end else if (memory_req_sent_r) begin
+        mem_wb_in.valid  = dmem_resp.valid;
+        dmem_resp.ready  = mem_wb_in.ready;
+        ex_mem_out.ready = dmem_resp.valid && mem_wb_in.ready;
       end
     end
 
-    memory_request_fire  = dmem_req.valid && dmem_req.ready;
-    memory_response_fire = dmem_rsp.valid && dmem_rsp.ready;
+    memory_req_fire  = dmem_req.valid && dmem_req.ready;
+    memory_resp_fire = dmem_resp.valid && dmem_resp.ready;
   end
 
-  `REG_CE_CLR_ARSTN(memory_request_sent_r, 1'b1, memory_request_fire, memory_response_fire, 1'b0)
+  `REG_CE_CLR_ARSTN(memory_req_sent_r, 1'b1, memory_req_fire, memory_resp_fire, 1'b0)
 
   `REG_ARSTN(writeback_valid_r, mem_wb_in.valid, 1'b0)
   `REG_CE(writeback_payload_r, mem_wb_in.payload, mem_wb_in.valid)
