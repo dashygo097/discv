@@ -14,7 +14,7 @@ module regfile
     input reg_addr_t rd_addr_i,
     input word_t     rd_data_i
 );
-  localparam int unsigned NumRegs = 1 << $bits(riscv_pkg::reg_addr_t);
+  localparam int unsigned NumRegs = 1 << $bits(reg_addr_t);
 
   word_t regs_r[NumRegs];
 
