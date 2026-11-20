@@ -1,6 +1,6 @@
 packages:
   amba:
-    revision: 5e542af09348b971139eab9b47b9a2d2186678d0
+    revision: ff756a60bdf7370bfc6d58d1e9d60bbc6d01e038
     version: null
     source:
       Git: https://github.com/dashygo097/amba.git
@@ -8,14 +8,14 @@ packages:
     - common_cells
     - dicflow
   common_cells:
-    revision: 6ae491a85b70f6fe7475d2c50f6625c53661c5a7
+    revision: 0a5e70d46a5603b62f75dc17957be3cfbdfda7be
     version: null
     source:
       Git: https://github.com/dashygo097/common_cells.git
     dependencies:
     - dicflow
   dicflow:
-    revision: 5684af459b8c0e7690e0c22e5d24cc1b46938604
+    revision: 4c7b2a5ff179085c2ace91fec2947e7aa286ba1a
     version: null
     source:
       Git: https://github.com/dashygo097/dicflow.git
