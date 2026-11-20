@@ -4,37 +4,37 @@ module cpu_5stage_inorder
   import riscv_pkg::*;
   import core_pkg::*;
 (
-    in logic clk_i,
-    in logic rst_n_i,
+    input logic clk_i,
+    input logic rst_n_i,
 
-    out logic  imem_req_valid_o,
-    in  logic  imem_req_ready_i,
-    out addr_t imem_req_addr_o,
+    output logic  imem_req_valid_o,
+    input  logic  imem_req_ready_i,
+    output addr_t imem_req_addr_o,
 
-    in  logic   imem_rsp_valid_i,
-    out logic   imem_rsp_ready_o,
-    in  instr_t imem_rsp_data_i,
-    in  logic   imem_rsp_error_i,
+    input  logic   imem_rsp_valid_i,
+    output logic   imem_rsp_ready_o,
+    input  instr_t imem_rsp_data_i,
+    input  logic   imem_rsp_error_i,
 
-    out logic         dmem_req_valid_o,
-    in  logic         dmem_req_ready_i,
-    out addr_t        dmem_req_addr_o,
-    out logic         dmem_req_write_o,
-    out word_t        dmem_req_data_o,
-    out byte_enable_t dmem_req_strb_o,
+    output logic         dmem_req_valid_o,
+    input  logic         dmem_req_ready_i,
+    output addr_t        dmem_req_addr_o,
+    output logic         dmem_req_write_o,
+    output word_t        dmem_req_data_o,
+    output byte_enable_t dmem_req_strb_o,
 
-    in  logic  dmem_rsp_valid_i,
-    out logic  dmem_rsp_ready_o,
-    in  word_t dmem_rsp_data_i,
-    in  logic  dmem_rsp_error_i,
+    input  logic  dmem_rsp_valid_i,
+    output logic  dmem_rsp_ready_o,
+    input  word_t dmem_rsp_data_i,
+    input  logic  dmem_rsp_error_i,
 
-    out logic      retire_valid_o,
-    out addr_t     retire_pc_o,
-    out instr_t    retire_instr_o,
-    out reg_addr_t retire_rd_o,
-    out word_t     retire_data_o,
-    out logic      retire_write_o,
-    out logic      retire_illegal_o
+    output logic      retire_valid_o,
+    output addr_t     retire_pc_o,
+    output instr_t    retire_instr_o,
+    output reg_addr_t retire_rd_o,
+    output word_t     retire_data_o,
+    output logic      retire_write_o,
+    output logic      retire_illegal_o
 );
 
   handshake_if #(.payload_t(imem_req_t)) imem_req ();
@@ -110,8 +110,8 @@ module cpu_5stage_inorder
   logic            writeback_valid_r;
   mem_wb_payload_t writeback_payload_r;
 
-  function automatic logic depends_on(in id_issue_payload_t consumer, in logic producer_valid,
-                                      in logic producer_write, in reg_addr_t destination);
+  function automatic logic depends_on(input id_issue_payload_t consumer, input logic producer_valid,
+                                      input logic producer_write, input reg_addr_t destination);
     return producer_valid && producer_write &&
         ((consumer.ctrl.rs1_read && consumer.rs1 != '0 && consumer.rs1 == destination) ||
          (consumer.ctrl.rs2_read && consumer.rs2 != '0 && consumer.rs2 == destination));
@@ -295,18 +295,10 @@ module cpu_5stage_inorder
       issue_ex_out.payload.ctrl.reg_write,
       issue_ex_out.payload.rd
     );
-    ex_mem_hazard = depends_on(
-      id_issue_out.payload,
-      ex_mem_out.valid,
-      ex_mem_out.payload.reg_write,
-      ex_mem_out.payload.rd
-    );
-    mem_wb_hazard = depends_on(
-      id_issue_out.payload,
-      mem_wb_out.valid,
-      mem_wb_out.payload.reg_write,
-      mem_wb_out.payload.rd
-    );
+    ex_mem_hazard = depends_on(id_issue_out.payload, ex_mem_out.valid, ex_mem_out.payload.reg_write,
+                               ex_mem_out.payload.rd);
+    mem_wb_hazard = depends_on(id_issue_out.payload, mem_wb_out.valid, mem_wb_out.payload.reg_write,
+                               mem_wb_out.payload.rd);
     issue_hazard = issue_ex_hazard || ex_mem_hazard || mem_wb_hazard;
 
     issue_serialize = id_issue_out.payload.ctrl.serialize &&
@@ -446,8 +438,8 @@ module cpu_5stage_inorder
         mem_wb_in.valid  = 1'b1;
         ex_mem_out.ready = mem_wb_in.ready;
       end else if (memory_request_sent_r) begin
-        mem_wb_in.valid = dmem_rsp.valid;
-        dmem_rsp.ready = mem_wb_in.ready;
+        mem_wb_in.valid  = dmem_rsp.valid;
+        dmem_rsp.ready   = mem_wb_in.ready;
         ex_mem_out.ready = dmem_rsp.valid && mem_wb_in.ready;
       end
     end
@@ -466,8 +458,7 @@ module cpu_5stage_inorder
     mem_wb_out.valid = writeback_valid_r;
     mem_wb_out.payload = writeback_payload_r;
 
-    regfile_write = mem_wb_out.valid && mem_wb_out.payload.reg_write &&
-        !mem_wb_out.payload.illegal;
+    regfile_write = mem_wb_out.valid && mem_wb_out.payload.reg_write && !mem_wb_out.payload.illegal;
 
     retire.valid = mem_wb_out.valid;
     retire.payload = '{
