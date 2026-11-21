@@ -1,0 +1,32 @@
+schema_version = 7
+
+[design]
+top = ""
+
+[architecture]
+generator = "scripts/project/riscv_config.py"
+march = "rv32i"
+reset_vector = 0x00000000
+
+[technology.generic]
+targets = ["generic"]
+
+[flow.sim.demu]
+backend = "scripts/sim/demu_backend.py"
+targets = ["simulation"]
+options = ["-Wall", "-Wno-fatal"]
+reset_cycles = 5
+max_cycles = 1000000
+ports = [
+  { name = "imem", protocol = "virt" },
+  { name = "dmem", protocol = "virt" },
+]
+devices = [
+  { name = "imem", type = "tcm", base = 0x00000000, size = 0x01000000, load_address = 0x00000000 },
+  { name = "dmem", type = "tcm", base = 0x80000000, size = 0x01000000 },
+  { name = "host_exit", type = "host_exit", base = 0x10000000, size = 4 },
+  { name = "console", type = "console", base = 0x10000004, size = 4 },
+]
+
+[workflow]
+stages = ["sim"]
