@@ -1,8 +1,10 @@
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <demu.hh>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 class DemuSimulatorTop final : public demu::DemuSimulator {
 public:
@@ -27,10 +29,8 @@ void print_usage(const char *prog) {
   std::cout << "  -t, --trace                   Enable VCD trace\n";
   std::cout << "  -T, --threads <n>             Number of Verilator threads "
                "(default: NUM_THREADS)\n";
-  std::cout
-      << "  -c, --cycles <n>              Run for n cycles (0=unlimited)\n";
-  std::cout
-      << "  -r, --reset-cycles <n>        Hold reset for n cycles\n";
+  std::cout << "  -c, --cycles <n>              Run up to n cycles\n";
+  std::cout << "  -r, --reset-cycles <n>        Hold reset for n cycles\n";
   std::cout
       << "  -d, --dump-regs               Dump registers after execution\n";
   std::cout << "  -m, --dump-mem <addr> <size>  Dump memory region\n";
@@ -84,9 +84,23 @@ auto main(int argc, char **argv) -> int {
       }
     } else if (arg == "-d" || arg == "--dump-regs") {
       dump_regs = true;
-    } else if (arg == "-c" || arg == "--cycles") {
-      if (i + 1 < argc) {
-        max_cycles = std::stoull(argv[++i]);
+    } else if (arg == "-c" || arg == "--cycles" || arg.rfind("-c=", 0) == 0 ||
+               arg.rfind("--cycles=", 0) == 0) {
+      const std::size_t separator = arg.find('=');
+      std::string_view value;
+      if (separator != std::string::npos) {
+        value = std::string_view(arg).substr(separator + 1);
+      } else if (i + 1 < argc) {
+        value = argv[++i];
+      } else {
+        std::cerr << "Missing cycle count\n";
+        return EXIT_FAILURE;
+      }
+      const char *end = value.data() + value.size();
+      const auto result = std::from_chars(value.data(), end, max_cycles);
+      if (result.ec != std::errc{} || result.ptr != end) {
+        std::cerr << "Invalid cycle count: " << value << '\n';
+        return EXIT_FAILURE;
       }
     } else if (arg == "-r" || arg == "--reset-cycles") {
       if (i + 1 < argc) {
@@ -157,5 +171,9 @@ auto main(int argc, char **argv) -> int {
     sim.dump_memory(dump_mem_addr, dump_mem_size);
   }
 
-  return sim.exit_code() == 0 ? 0 : 1;
+  if (sim.exit_code() != 0) {
+    std::cerr << "Simulation exit status: " << sim.exit_code() << '\n';
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
 }

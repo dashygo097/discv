@@ -12,7 +12,7 @@ verilate(demu
     --top-module ${TOP_MODULE}
     -f
 
-  PREFIX V${TOP_MODULE}
+  PREFIX Vdemu_sim_top
   TRACE_THREADS ${NUM_TRACE_THREADS}
   THREADS ${NUM_THREADS}
 )

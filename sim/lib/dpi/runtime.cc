@@ -22,10 +22,10 @@ void unbind(DemuSimulator &simulator) noexcept {
 
 extern "C" auto demu_context() noexcept -> void * { return active_simulator; }
 
-extern "C" auto demu_submit(void *context, std::uint32_t port, svBit write,
-                            std::uint32_t address, std::uint32_t data,
-                            std::uint32_t strobe, std::uint32_t size,
-                            std::uint64_t *transaction) noexcept -> int {
+extern "C" auto demu_submit(void *context, unsigned int port, svBit write,
+                            unsigned int address, unsigned int data,
+                            unsigned int strobe, unsigned int size,
+                            unsigned long long *transaction) noexcept -> int {
   auto *simulator = static_cast<demu::DemuSimulator *>(context);
   if (simulator == nullptr || transaction == nullptr) {
     return -1;
@@ -47,10 +47,11 @@ extern "C" auto demu_submit(void *context, std::uint32_t port, svBit write,
   return 0;
 }
 
-extern "C" auto demu_poll(void *context, std::uint64_t transaction,
-                          std::uint32_t *data, svBit *error) noexcept -> int {
+extern "C" auto demu_poll(void *context, unsigned long long transaction,
+                          unsigned int *data, unsigned char *status) noexcept
+    -> int {
   auto *simulator = static_cast<demu::DemuSimulator *>(context);
-  if (simulator == nullptr || data == nullptr || error == nullptr) {
+  if (simulator == nullptr || data == nullptr || status == nullptr) {
     return -1;
   }
   const auto response = simulator->poll_transaction(transaction);
@@ -58,12 +59,12 @@ extern "C" auto demu_poll(void *context, std::uint64_t transaction,
     return 0;
   }
   *data = response->data;
-  *error = response->error() ? 1 : 0;
+  *status = static_cast<unsigned char>(response->status);
   return 1;
 }
 
-extern "C" auto demu_complete(void *context, std::uint64_t transaction) noexcept
-    -> int {
+extern "C" auto demu_complete(void *context,
+                              unsigned long long transaction) noexcept -> int {
   auto *simulator = static_cast<demu::DemuSimulator *>(context);
   return simulator != nullptr && simulator->complete_transaction(transaction)
              ? 0

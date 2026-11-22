@@ -38,15 +38,18 @@ public:
   [[nodiscard]] auto reg(std::uint8_t reg) const noexcept -> word_t {
     return register_values_[reg];
   }
+  [[nodiscard]] auto host_exit_requested() const noexcept -> bool {
+    return device_manager_->exit_requested();
+  }
   [[nodiscard]] auto is_terminate() const noexcept -> bool {
-    return terminate_ || device_manager_->exit_requested();
+    return terminate_ || host_exit_requested();
   }
   [[nodiscard]] auto exit_code() const noexcept -> word_t {
-    return device_manager_->exit_requested() ? device_manager_->exit_code()
-                                             : exit_code_;
+    if (exit_code_ != 0) {
+      return exit_code_;
+    }
+    return host_exit_requested() ? device_manager_->exit_code() : 0;
   }
-
-  void timeout(std::uint64_t timeout) noexcept { timeout_ = timeout; }
 
   [[nodiscard]] auto cycle_count() const noexcept -> std::uint64_t {
     return cycle_count_;
@@ -91,7 +94,6 @@ protected:
 private:
   void clock_tick();
 
-  std::uint64_t timeout_{1000000};
   std::uint64_t cycle_count_{0};
   std::uint64_t instret_count_{0};
   bool trace_enabled_{false};

@@ -1,11 +1,6 @@
-set(DEMU_SIM_TARGET demu-riscv)
-add_executable(${DEMU_SIM_TARGET})
-
-target_sources(${DEMU_SIM_TARGET} PRIVATE main.cpp)
-target_link_libraries(${DEMU_SIM_TARGET} PRIVATE demu Threads::Threads)
-set_target_properties(${DEMU_SIM_TARGET} PROPERTIES
-  OUTPUT_NAME ${DEMU_SIM_TARGET} 
-  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+add_executable("${SIM_EXECUTABLE}" main.cpp)
+target_link_libraries("${SIM_EXECUTABLE}" PRIVATE demu)
+set_target_properties("${SIM_EXECUTABLE}" PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-
-install(TARGETS ${DEMU_SIM_TARGET} DESTINATION bin)
+install(TARGETS "${SIM_EXECUTABLE}" DESTINATION bin)

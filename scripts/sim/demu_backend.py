@@ -18,11 +18,12 @@ from project_config import (
     unsigned_integer,
 )
 
+DEFAULT_SIM_TOP = "demu_sim_top"
+
 BACKEND = {
     "tool": "verilator",
     "version_args": ["--version"],
     "format": "verilator",
-    "requires_top": True,
     "config_inputs": ["architecture", "environment.packages.spdlog"],
     "summary": "log",
     "generated_sources": [
@@ -52,16 +53,21 @@ BACKEND = {
         ],
         ["cmake", "--build", "{model}", "--parallel", "{jobs}"],
     ],
-    "outputs": ["{results}/demu-riscv", "{model}/compile_commands.json"],
+    "outputs": {
+        "compile_commands": "{model}/compile_commands.json",
+        "platform": "{results}/platform.json",
+    },
     "views": {"compile_commands.json": "{model}/compile_commands.json"},
     "tools": {"cmake": ["cmake", "--version"]},
-    "defaults": {"threads": 1, "trace": False},
+    "defaults": {"threads": 1, "trace": False, "sim_top": DEFAULT_SIM_TOP},
 }
 
 
 def configure(config, settings, root):
     if "architecture" not in config:
-        raise ConfigError("The CPU DEMU adapter requires an architecture generator")
+        raise ConfigError("DEMU requires an architecture generator")
+    if config["architecture"]["xlen"] != 32:
+        raise ConfigError("DEMU currently supports 32-bit address and data words")
     section = next(
         f"flow.sim.{name}"
         for name, candidate in config["flow"]["sim"].items()
@@ -75,29 +81,74 @@ def configure(config, settings, root):
         raise ConfigError(f"{section}.threads: expected a positive integer")
     if not isinstance(settings["trace"], bool):
         raise ConfigError(f"{section}.trace: expected a boolean")
+    sim_top = require_string(settings, "sim_top", section)
+    if not IDENTIFIER.fullmatch(sim_top):
+        raise ConfigError(
+            f"{section}.sim_top: expected a SystemVerilog module identifier"
+        )
     settings.update(
         normalize_simulation(
             settings,
             config["architecture"],
-            required=True,
+            virt_harness=sim_top == DEFAULT_SIM_TOP,
             section=section,
         )
     )
+    settings["targets"] = list(dict.fromkeys([*settings["targets"], "simulation"]))
+    outputs = {
+        **BACKEND["outputs"],
+        **{
+            role: "{results}/" + name for role, name in executable_names(config).items()
+        },
+    }
+    if firmware_memory(config, settings) is not None:
+        outputs["firmware_linker"] = "{results}/linker.ld"
+        outputs["firmware_start"] = "{results}/start.S"
+    settings["_backend"]["outputs"] = outputs
+
+
+def executable_names(config):
+    march = config["architecture"]["march"]
+    return {"simulator": f"demu-sim-{march}", "simtest": f"demu-simtest-{march}"}
+
+
+def host_exit_device(settings):
+    return next(
+        (device for device in settings["devices"] if device["type"] == "host_exit"),
+        None,
+    )
+
+
+def firmware_memory(config, settings):
+    devices = {device["name"]: device for device in settings["devices"]}
+    imem, dmem = devices.get("imem", {}), devices.get("dmem", {})
+    if (
+        imem.get("load_address") == config["architecture"]["reset_vector"]
+        and dmem.get("type") == "tcm"
+    ):
+        return imem, dmem
+    return None
 
 
 def generate(config, settings, root):
     digest = config_digest(
         {"architecture": config["architecture"], "simulation": settings}
     )
-    return {
+    files = {
         "demu/generated/cfg.hh": render_demu_config(config, digest),
         "demu/generated/platform.hh": render_demu_platform(settings, digest),
         "demu/generated/demu_platform_pkg.sv": render_demu_platform_package(
             settings, digest
         ),
-        "demu/linker.ld": render_demu_linker(settings, digest, root),
-        "demu/start.S": render_demu_start(settings, digest, root),
     }
+    memory = firmware_memory(config, settings)
+    if memory is not None:
+        imem, dmem = memory
+        files["demu/linker.ld"] = render_demu_linker(imem, dmem, digest, root)
+        files["demu/start.S"] = render_template(
+            root / "sim/templates/rv32_start.S.in", {"CONFIG_DIGEST": digest}
+        )
+    return files
 
 
 def tools(config, entry):
@@ -105,6 +156,8 @@ def tools(config, entry):
 
 
 def preflight(config, entry, root):
+    if entry["settings"]["sim_top"] == DEFAULT_SIM_TOP and not config["design"]["top"]:
+        raise ConfigError("The built-in DEMU harness requires design.top")
     cmake = shutil.which("cmake")
     if cmake is None:
         raise ConfigError("Required command not found: cmake")
@@ -135,8 +188,11 @@ def preflight(config, entry, root):
 
 def prepare(config, entry, root, directory, source):
     settings = entry["settings"]
+    names = executable_names(config)
     values = {
-        "SIM_TOP": "demu_sim_top",
+        "SIM_EXECUTABLE": names["simulator"],
+        "SIMTEST_EXECUTABLE": names["simtest"],
+        "SIM_TOP": settings["sim_top"],
         "SIM_RTL_TOP": config["design"]["top"],
         "SIM_THREADS": settings["threads"],
         "SIM_TRACE": "ON" if settings["trace"] else "OFF",
@@ -155,13 +211,32 @@ def prepare(config, entry, root, directory, source):
 
 def collect(config, entry, directory, snapshot):
     model = directory / "model" / snapshot["input_digest"]
-    executable = model / "bin/demu-riscv"
-    if not executable.is_file():
-        raise ConfigError("CMake did not create the simulator executable")
+    results = directory / "results"
     database = model / "compile_commands.json"
     if not database.is_file():
         raise ConfigError("CMake did not create compile_commands.json")
-    shutil.copy2(executable, directory / "results/demu-riscv")
+    for name in executable_names(config).values():
+        executable = model / "bin" / name
+        if not executable.is_file():
+            raise ConfigError(f"CMake did not create {name}")
+        shutil.copy2(executable, results / name)
+
+    architecture = config["architecture"]
+    settings = entry["settings"]
+    host_exit = host_exit_device(settings)
+    platform = {
+        "march": architecture["march"],
+        "xlen": architecture["xlen"],
+        "extensions": architecture["extensions"],
+        "host_exit_address": None if host_exit is None else host_exit["base"],
+        "reset_cycles": settings["reset_cycles"],
+    }
+    (results / "platform.json").write_text(json.dumps(platform, indent=2) + "\n")
+
+    if firmware_memory(config, settings) is not None:
+        firmware = Path("build/generated/demu")
+        shutil.copy2(firmware / "linker.ld", results / "linker.ld")
+        shutil.copy2(firmware / "start.S", results / "start.S")
 
 
 def run(config, entry, directory):
@@ -172,7 +247,7 @@ def run(config, entry, directory):
         raise ConfigError(f"Program does not exist: {program}")
     simulation = entry["settings"]
     argv = [
-        str(directory / "results/demu-riscv"),
+        str(directory / "results" / executable_names(config)["simulator"]),
         "--cycles",
         str(simulation["max_cycles"]),
         "--reset-cycles",
@@ -188,38 +263,33 @@ def run(config, entry, directory):
     }
 
 
-def normalize_simulation(settings, architecture, *, required, section):
+def normalize_simulation(settings, architecture, *, virt_harness, section):
     simulation = {
         key: settings[key]
         for key in ("reset_cycles", "max_cycles", "ports", "devices")
         if key in settings
     }
     ports = simulation.get("ports", [])
-    if not isinstance(ports, list):
-        raise ConfigError(f"{section}.ports: expected an array of tables")
+    if not isinstance(ports, list) or not ports:
+        raise ConfigError(f"{section}.ports: expected a nonempty array of tables")
     normalized_ports = []
     port_names = set()
     for index, port in enumerate(ports):
         location = f"{section}.ports[{index}]"
         if not isinstance(port, dict):
             raise ConfigError(f"{location}: expected a table")
-        reject_unknown(port, {"name", "protocol"}, location)
+        reject_unknown(port, {"name"}, location)
         name = require_string(port, "name", location)
-        if not IDENTIFIER.match(name):
+        if not IDENTIFIER.fullmatch(name):
             raise ConfigError(f"{location}.name: expected an identifier")
-        if name in port_names:
+        if name.upper() in port_names:
             raise ConfigError(f"{location}.name: duplicate port name: {name}")
-        port_names.add(name)
-        protocol = require_string(port, "protocol", location)
-        if protocol != "virt":
-            raise ConfigError(
-                f'{location}.protocol: only "virt" is currently implemented'
-            )
-        normalized_ports.append(
-            {
-                "name": name,
-                "protocol": protocol,
-            }
+        port_names.add(name.upper())
+        normalized_ports.append({"name": name})
+
+    if virt_harness and not {"IMEM", "DMEM"}.issubset(port_names):
+        raise ConfigError(
+            f"{section}.ports: the built-in harness requires imem and dmem"
         )
 
     devices = simulation.get("devices", [])
@@ -228,7 +298,6 @@ def normalize_simulation(settings, architecture, *, required, section):
 
     normalized_devices = []
     device_names = set()
-    load_tcm_count = 0
     for index, device in enumerate(devices):
         location = f"{section}.devices[{index}]"
         if not isinstance(device, dict):
@@ -275,7 +344,6 @@ def normalize_simulation(settings, architecture, *, required, section):
                     f"{location}.load_address: address is outside the device"
                 )
             normalized_device["load_address"] = load_address
-            load_tcm_count += 1
 
         normalized_devices.append(normalized_device)
 
@@ -287,27 +355,17 @@ def normalize_simulation(settings, architecture, *, required, section):
                 f"{previous['name']} and {current['name']}"
             )
 
-    if required:
-        if not normalized_ports:
-            raise ConfigError(
-                f"{section}.ports: expected at least one port when simulation is enabled"
-            )
-        if not normalized_devices:
-            raise ConfigError(
-                f"{section}.devices: expected at least one device when simulation is enabled"
-            )
-    reset_vector = architecture["reset_vector"]
-    if required and (
-        isinstance(reset_vector, bool) or not isinstance(reset_vector, int)
-    ):
-        raise ConfigError(f"{section}: architecture.reset_vector must be an integer")
-    if required:
-        port_names = {port["name"] for port in normalized_ports}
-        for name in ("imem", "dmem"):
-            if name not in port_names:
-                raise ConfigError(
-                    f'{section}.ports: required virtual port is missing: "{name}"'
-                )
+    load_devices = [device for device in normalized_devices if "load_address" in device]
+    if len(load_devices) != 1:
+        raise ConfigError(
+            f"{section}.devices: exactly one TCM must define load_address"
+        )
+    if sum(device["type"] == "host_exit" for device in normalized_devices) > 1:
+        raise ConfigError(
+            f"{section}.devices: at most one host_exit device is supported"
+        )
+
+    if virt_harness:
         devices_by_name = {device["name"]: device for device in normalized_devices}
         for name in ("imem", "dmem"):
             device = devices_by_name.get(name)
@@ -316,23 +374,9 @@ def normalize_simulation(settings, architecture, *, required, section):
                     f'{section}.devices: "{name}" must be configured with type = "tcm"'
                 )
 
-        imem = devices_by_name["imem"]
-        if load_tcm_count != 1 or imem.get("load_address") != reset_vector:
+        if devices_by_name["imem"].get("load_address") != architecture["reset_vector"]:
             raise ConfigError(
-                f"{section}.devices: imem must be the only device defining "
-                "load_address, and it must equal architecture.reset_vector"
-            )
-        if not imem["base"] <= reset_vector < imem["base"] + imem["size"]:
-            raise ConfigError(
-                f"{section}.devices: architecture.reset_vector is outside imem"
-            )
-
-        host_exit_devices = [
-            device for device in normalized_devices if device["type"] == "host_exit"
-        ]
-        if len(host_exit_devices) != 1:
-            raise ConfigError(
-                f"{section}.devices: exactly one host_exit device is required"
+                f"{section}.devices: imem.load_address must equal architecture.reset_vector"
             )
 
     return {
@@ -344,7 +388,6 @@ def normalize_simulation(settings, architecture, *, required, section):
         "max_cycles": unsigned_integer(
             simulation.get("max_cycles", 1000000),
             f"{section}.max_cycles",
-            positive=True,
             maximum=0xFFFFFFFFFFFFFFFF,
         ),
         "ports": normalized_ports,
@@ -396,11 +439,9 @@ def render_demu_platform(settings, digest):
         "console": "Console",
         "host_exit": "HostExit",
     }
-    port_entries = []
-    for port in ports:
-        port_entries.append(
-            f"    PortDescriptor{{{cpp_string(port['name'])}, hal::BusProtocol::Virt}}"
-        )
+    port_entries = [
+        f"    PortDescriptor{{{cpp_string(port['name'])}}}" for port in ports
+    ]
     device_entries = []
     for device in devices:
         device_entries.append(
@@ -434,25 +475,19 @@ def render_demu_platform(settings, digest):
 
 
 def render_demu_platform_package(settings, digest):
-    ports = settings["ports"]
-    port_constants = [
+    constants = [
         f"  localparam int unsigned {port['name'].upper()}_PORT = {index};"
-        for index, port in enumerate(ports)
+        for index, port in enumerate(settings["ports"])
     ]
-    return "".join(
-        [
-            header("//", digest),
-            "package demu_platform_pkg;\n\n",
-            "\n".join(port_constants),
-            "\n",
-            "endpackage\n",
-        ]
+    return (
+        header("//", digest)
+        + "package demu_platform_pkg;\n"
+        + "\n".join(constants)
+        + "\nendpackage\n"
     )
 
 
-def render_demu_linker(settings, digest, root):
-    devices = {device["name"]: device for device in settings["devices"]}
-    imem, dmem = devices["imem"], devices["dmem"]
+def render_demu_linker(imem, dmem, digest, root):
     origin = imem["load_address"]
     return render_template(
         root / "sim/templates/linker.ld.in",
@@ -462,19 +497,6 @@ def render_demu_linker(settings, digest, root):
             "IMEM_LENGTH": f"0x{imem['base'] + imem['size'] - origin:X}",
             "DMEM_ORIGIN": f"0x{dmem['base']:08X}",
             "DMEM_LENGTH": f"0x{dmem['size']:X}",
-        },
-    )
-
-
-def render_demu_start(settings, digest, root):
-    host_exit = next(
-        device for device in settings["devices"] if device["type"] == "host_exit"
-    )
-    return render_template(
-        root / "sim/templates/rv32_start.S.in",
-        {
-            "CONFIG_DIGEST": digest,
-            "EXIT_ADDRESS": f"0x{host_exit['base']:08X}",
         },
     )
 

@@ -11,11 +11,11 @@ enum class AccessType : std::uint8_t {
 };
 
 enum class ResponseStatus : std::uint8_t {
-  Okay,
-  DecodeError,
-  SlaveError,
-  Misaligned,
-  Unsupported,
+  Okay = 0,
+  DecodeError = 1,
+  SlaveError = 2,
+  Misaligned = 3,
+  Unsupported = 4,
 };
 
 enum class DeviceEventType : std::uint8_t {

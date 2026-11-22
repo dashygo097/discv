@@ -89,11 +89,10 @@ void DemuSimulator::step(std::uint64_t cycles) {
 }
 
 void DemuSimulator::run(std::uint64_t max_cycles) {
-  const std::uint64_t target = max_cycles > 0 ? max_cycles : timeout_;
   DEMU_INFO("Starting DEMU Simulation...")
   const auto start = std::chrono::high_resolution_clock::now();
   on_init();
-  while (cycle_count_ < target && !is_terminate()) {
+  while (!is_terminate() && (cycle_count_ < max_cycles)) {
     clock_tick();
   }
   on_exit();
@@ -103,8 +102,8 @@ void DemuSimulator::run(std::uint64_t max_cycles) {
           .count();
 
   if (!is_terminate()) {
-    exit_code_ = 1;
-    DEMU_WARN("Simulation TIME OUT after {} cycles", cycle_count_)
+    DEMU_INFO("Simulation reached its cycle limit after {} cycles",
+              cycle_count_)
   }
   DEMU_INFO("Simulation completed with: ")
   DEMU_INFO("  {} cycles, {} instructions, IPC: {:.3f} after {:.3f} ms",

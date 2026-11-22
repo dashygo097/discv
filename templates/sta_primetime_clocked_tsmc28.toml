@@ -1,0 +1,73 @@
+schema_version = 7
+
+[design]
+top = ""
+
+[architecture]
+generator = "scripts/project/riscv_config.py"
+march = "rv32i"
+reset_vector = 0x00000000
+
+[build]
+technology = "tsmc28"
+
+[technology.tsmc28]
+targets = ["asic", "tsmc28"]
+
+[technology.tsmc28.libraries]
+stdcell_setup = ""
+stdcell_hold = ""
+
+[technology.tsmc28.dc]
+target_libraries = ["stdcell_setup"]
+library_pairs = [{ max = "stdcell_setup", min = "stdcell_hold" }]
+
+[constraints]
+clocks = [
+  { name = "", period = 10.0, setup_uncertainty = 0.20, hold_uncertainty = 0.05, transition = 0.10 },
+]
+input_delays = [{ clock = "", ports = [], max = 2.0, min = 0.2 }]
+output_delays = [{ clock = "", ports = [], max = 2.0, min = 0.2 }]
+input_transitions = [{ ports = [], rise = 0.10, fall = 0.10 }]
+output_loads = [{ ports = [], capacitance = 0.05 }]
+design_rules = { max_transition = 0.50, max_fanout = 16, max_capacitance = 0.20 }
+
+[flow.synth.dc]
+technologies = ["tsmc28"]
+targets = ["synthesis"]
+options = ["-64bit"]
+compile = "ultra"
+preserve_hierarchy = true
+retime = false
+clock_gating = false
+
+[technology.tsmc28.primetime]
+wire_load_model = ""
+wire_load_mode = "segmented"
+
+[technology.tsmc28.timing.views.functional_setup]
+libraries = ["stdcell_setup"]
+checks = ["setup"]
+rc = "rcmax"
+
+[technology.tsmc28.timing.views.functional_hold]
+libraries = ["stdcell_hold"]
+checks = ["hold"]
+rc = "rcmin"
+
+[flow.sta.primetime]
+technologies = ["tsmc28"]
+views = ["functional_setup", "functional_hold"]
+mode = "functional"
+fail_on_violations = true
+
+[flow.sta.primetime.modes.functional]
+case_analysis = {}
+
+[flow.sta.primetime.prelayout]
+requires = "synth.dc"
+clock_model = "ideal"
+interconnect_model = "wire_load"
+
+[workflow]
+stages = ["sta"]

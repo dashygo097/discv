@@ -12,11 +12,11 @@ sources:
   - rtl/pkgs/riscv_pkg.sv
   - rtl/pkgs/core_pkg.sv
   - rtl/core/**/*.sv
-  - rtl/top/**/*.sv
+  - rtl/bridges/**/*.sv
+  - rtl/tops/**/*.sv
   - target: simulation
     files:
       - sim/rtl/demu_dpi_pkg.sv
-      - sim/rtl/demu_virt_imem_bfm.sv
-      - sim/rtl/demu_virt_dmem_bfm.sv
       - sim/rtl/demu_retire_monitor.sv
+      - sim/rtl/**/*_bfm.sv
       - sim/rtl/demu_sim_top.sv

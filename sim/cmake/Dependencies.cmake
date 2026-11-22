@@ -13,11 +13,9 @@ endif()
 if(NOT EXISTS "${SIM_BENDER_FILELIST}")
   message(FATAL_ERROR "Bender Verilator input file is missing")
 endif()
-if(NOT SIM_RTL_TOP)
-  message(FATAL_ERROR "SIM_RTL_TOP is empty in generated sim.cmake")
-endif()
-
 set(DEMU_VERILATOR_ARGS
+  "-I${GENERATED_INCLUDE_DIR}/demu/generated"
+  "-DDEMU_SIM_TOP_${TOP_MODULE}"
   -Wall
   -Wno-WIDTH
   -Wno-UNUSED
@@ -25,9 +23,12 @@ set(DEMU_VERILATOR_ARGS
   -Wno-DECLFILENAME
   -Wno-PINCONNECTEMPTY
   -Wno-COVERIGN
-  "-DDEMU_RTL_TOP=${SIM_RTL_TOP}"
   ${SIM_VERILATOR_OPTIONS}
 )
+
+if(SIM_RTL_TOP)
+  list(APPEND DEMU_VERILATOR_ARGS "-DDEMU_RTL_TOP=${SIM_RTL_TOP}")
+endif()
 
 if(ENABLE_TRACE)
   list(APPEND DEMU_VERILATOR_ARGS --trace)

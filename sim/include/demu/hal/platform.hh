@@ -15,13 +15,8 @@ enum class DeviceType {
   HostExit,
 };
 
-enum class BusProtocol {
-  Virt,
-};
-
 struct PortDescriptor {
   std::string_view name;
-  BusProtocol protocol;
 };
 
 struct DeviceDescriptor {

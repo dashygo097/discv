@@ -1,0 +1,6 @@
+add_executable("${SIMTEST_EXECUTABLE}" main.cpp)
+target_link_libraries("${SIMTEST_EXECUTABLE}" PRIVATE demu)
+set_target_properties("${SIMTEST_EXECUTABLE}" PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+install(TARGETS "${SIMTEST_EXECUTABLE}" DESTINATION bin)

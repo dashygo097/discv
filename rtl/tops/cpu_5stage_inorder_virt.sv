@@ -1,6 +1,6 @@
 `include "cc/registers.svh"
 
-module cpu_5stage_inorder
+module cpu_5stage_inorder_virt
   import riscv_pkg::*;
   import core_pkg::*;
 (

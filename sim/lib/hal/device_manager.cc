@@ -164,11 +164,6 @@ auto DeviceManager::submit(port_id_t port,
   }
 
   const auto &port_desc = ports_[port];
-  if (port_desc.protocol != BusProtocol::Virt) {
-    HAL_WARN("Port '{}' has an unsupported protocol", port_desc.name)
-    return std::nullopt;
-  }
-
   auto *target = find_mmio_target(transaction.address);
   const auto id = next_transaction_++;
   if (target == nullptr) {
