@@ -11,7 +11,8 @@ from project_config import (
     unsigned_integer,
 )
 
-GENERATOR = {"sources": [{"files": ["arch_pkg.sv"]}]}
+ARCH_PACKAGE = "project/rtl/arch_pkg.sv"
+GENERATOR = {"sources": [{"files": [ARCH_PACKAGE]}]}
 
 RISCV_MARCH = re.compile(
     r"^rv(?P<xlen>32|64)(?P<compact>[a-z0-9]+)"
@@ -123,7 +124,7 @@ def configure(settings, root):
 
 
 def generate(config, settings, root):
-    return {"arch_pkg.sv": render_arch_package(settings, config_digest(settings))}
+    return {ARCH_PACKAGE: render_arch_package(settings, config_digest(settings))}
 
 
 def render_arch_package(architecture, digest):

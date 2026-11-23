@@ -1,5 +1,6 @@
 #include "demu/hal/device_manager.hh"
 #include "demu/generated/platform.hh"
+#include "demu/hal/periph/boot_rom/boot_rom.hh"
 #include "demu/hal/periph/console/console.hh"
 #include "demu/hal/periph/host_exit/host_exit.hh"
 #include "demu/hal/periph/tcm/tcm.hh"
@@ -43,6 +44,9 @@ auto DeviceManager::configure() -> bool {
     switch (desc.type) {
     case DeviceType::TCM:
       device = std::make_unique<periph::tcm::TCM>(desc);
+      break;
+    case DeviceType::BootROM:
+      device = std::make_unique<periph::boot_rom::BootROM>(desc);
       break;
     case DeviceType::Console:
       device = std::make_unique<periph::console::Console>(desc);

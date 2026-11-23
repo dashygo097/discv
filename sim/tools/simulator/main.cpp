@@ -23,7 +23,7 @@ private:
 };
 
 void print_usage(const char *prog) {
-  std::cout << "Usage: " << prog << " [options] <program_file>\n\n";
+  std::cout << "Usage: " << prog << " [options] [program_file]\n\n";
   std::cout << "Options:\n";
   std::cout << "  -h, --help                    Show this help message\n";
   std::cout << "  -t, --trace                   Enable VCD trace\n";
@@ -53,11 +53,6 @@ auto main(int argc, char **argv) -> int {
                                                  
                                                  )"
             << "\n";
-
-  if (argc < 2) {
-    print_usage(argv[0]);
-    return 1;
-  }
 
   std::string program_file;
   bool enable_trace = false;
@@ -143,12 +138,6 @@ auto main(int argc, char **argv) -> int {
     }
   }
 
-  if (program_file.empty()) {
-    std::cerr << "Error: No program file specified\n";
-    print_usage(argv[0]);
-    return 1;
-  }
-
   demu::Logger::init(spdlog_level);
 
   DemuSimulatorTop sim(enable_trace, threads, argc, argv);
@@ -156,7 +145,7 @@ auto main(int argc, char **argv) -> int {
   sim.init();
   sim.reset(reset_cycles);
 
-  if (!sim.load_bin(program_file)) {
+  if (!program_file.empty() && !sim.load_bin(program_file)) {
     std::cerr << "Error: Failed to load program\n";
     return 1;
   }

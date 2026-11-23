@@ -14,7 +14,6 @@ if(NOT EXISTS "${SIM_BENDER_FILELIST}")
   message(FATAL_ERROR "Bender Verilator input file is missing")
 endif()
 set(DEMU_VERILATOR_ARGS
-  "-I${GENERATED_INCLUDE_DIR}/demu/generated"
   "-DDEMU_SIM_TOP_${TOP_MODULE}"
   -Wall
   -Wno-WIDTH

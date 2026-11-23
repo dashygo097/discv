@@ -10,9 +10,10 @@ using device_id_t = std::uint32_t;
 using transaction_id_t = std::uint64_t;
 
 enum class DeviceType {
-  TCM,
-  Console,
   HostExit,
+  Console,
+  BootROM,
+  TCM,
 };
 
 struct PortDescriptor {

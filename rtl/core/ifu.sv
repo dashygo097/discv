@@ -42,22 +42,34 @@ module ifu
       .out    (if_id)
   );
 
-  assign resp_stale = stale_r || redirect_valid_i;
-  assign imem_resp.ready = (state_r == WAIT_RESP) && (resp_stale || if_id_in.ready);
-  assign resp_fire = imem_resp.valid && imem_resp.ready;
+  always_comb begin
+    resp_stale = stale_r || redirect_valid_i;
+    req_stale  = (state_r == HOLD_REQ) && resp_stale;
+  end
 
-  assign if_id_in.valid = (state_r == WAIT_RESP) && imem_resp.valid && !resp_stale;
-  assign if_id_in.payload = '{
-          pc: transaction_pc_r,
-          instr: imem_resp.payload.data,
-          error: imem_resp.payload.error
-      };
+  always_comb begin
+    imem_resp.ready = (state_r == WAIT_RESP) && (resp_stale || if_id_in.ready);
+  end
 
-  assign imem_req.valid = rst_n_i && ((state_r == HOLD_REQ) ||
-      (!redirect_valid_i && ((state_r == IDLE) || resp_fire)));
-  assign imem_req.payload = '{addr: (state_r == HOLD_REQ) ? transaction_pc_r : next_pc_r};
-  assign req_fire = imem_req.valid && imem_req.ready;
-  assign req_stale = (state_r == HOLD_REQ) && (stale_r || redirect_valid_i);
+  always_comb begin
+    if_id_in.valid = (state_r == WAIT_RESP) && imem_resp.valid && !resp_stale;
+    if_id_in.payload = '{
+        pc: transaction_pc_r,
+        instr: imem_resp.payload.data,
+        error: imem_resp.payload.error
+    };
+  end
+
+  always_comb begin
+    resp_fire = imem_resp.valid && imem_resp.ready;
+    imem_req.valid = rst_n_i && ((state_r == HOLD_REQ) ||
+        (!redirect_valid_i && ((state_r == IDLE) || resp_fire)));
+    imem_req.payload = '{addr: (state_r == HOLD_REQ) ? transaction_pc_r : next_pc_r};
+  end
+
+  always_comb begin
+    req_fire = imem_req.valid && imem_req.ready;
+  end
 
   always_ff @(posedge clk_i or negedge rst_n_i) begin
     if (!rst_n_i) begin

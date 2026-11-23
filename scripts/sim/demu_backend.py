@@ -19,6 +19,17 @@ from project_config import (
 )
 
 DEFAULT_SIM_TOP = "demu_sim_top"
+PLATFORM_PACKAGE = "project/rtl/demu_platform_pkg.sv"
+FIRMWARE_DIR = "project/firmware"
+BAREMETAL_TEMPLATES = "sim/runtime/baremetal/rv32"
+DEVICE_TYPES = {
+    "tcm": "TCM",
+    "boot_rom": "BootROM",
+    "console": "Console",
+    "host_exit": "HostExit",
+}
+IMAGE_MEMORY_TYPES = {"tcm", "boot_rom"}
+DATA_MEMORY_TYPES = {"tcm"}
 
 BACKEND = {
     "tool": "verilator",
@@ -27,9 +38,9 @@ BACKEND = {
     "config_inputs": ["architecture", "environment.packages.spdlog"],
     "summary": "log",
     "generated_sources": [
-        {"target": "simulation", "files": ["demu/generated/demu_platform_pkg.sv"]},
+        {"target": "simulation", "files": [PLATFORM_PACKAGE]},
     ],
-    "inputs": ["sim/**/*", "build/generated/demu/**/*"],
+    "inputs": ["sim/**/*", "build/generated/project/**/*"],
     "tracked_environment": [
         "CC",
         "CXX",
@@ -47,7 +58,7 @@ BACKEND = {
             "-B",
             "{model}",
             "-DPROJECT_CONFIG_CMAKE={inputs}/sim.cmake",
-            "-DGENERATED_INCLUDE_DIR={generated}",
+            "-DGENERATED_INCLUDE_DIR={generated}/project/include",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DOBJCACHE_ENABLED=OFF",
         ],
@@ -89,7 +100,6 @@ def configure(config, settings, root):
     settings.update(
         normalize_simulation(
             settings,
-            config["architecture"],
             virt_harness=sim_top == DEFAULT_SIM_TOP,
             section=section,
         )
@@ -120,14 +130,24 @@ def host_exit_device(settings):
 
 
 def firmware_memory(config, settings):
-    devices = {device["name"]: device for device in settings["devices"]}
-    imem, dmem = devices.get("imem", {}), devices.get("dmem", {})
-    if (
-        imem.get("load_address") == config["architecture"]["reset_vector"]
-        and dmem.get("type") == "tcm"
-    ):
-        return imem, dmem
-    return None
+    devices = settings["devices"]
+    reset_vector = config["architecture"]["reset_vector"]
+    image = next(
+        (device for device in devices if device.get("load_address") == reset_vector),
+        None,
+    )
+    if image is None:
+        return None
+
+    banks = [device for device in devices if device["type"] in DATA_MEMORY_TYPES]
+    data = next((bank for bank in banks if bank.get("firmware_data")), None)
+    if data is None:
+        candidates = [bank for bank in banks if bank is not image]
+        if len(candidates) == 1:
+            data = candidates[0]
+        elif not candidates and image["type"] in DATA_MEMORY_TYPES:
+            data = image
+    return (image, data, banks) if data is not None else None
 
 
 def generate(config, settings, root):
@@ -135,18 +155,20 @@ def generate(config, settings, root):
         {"architecture": config["architecture"], "simulation": settings}
     )
     files = {
-        "demu/generated/cfg.hh": render_demu_config(config, digest),
-        "demu/generated/platform.hh": render_demu_platform(settings, digest),
-        "demu/generated/demu_platform_pkg.sv": render_demu_platform_package(
+        "project/include/demu/generated/cfg.hh": render_demu_config(config, digest),
+        "project/include/demu/generated/platform.hh": render_demu_platform(
             settings, digest
         ),
+        PLATFORM_PACKAGE: render_demu_platform_package(settings, digest),
     }
     memory = firmware_memory(config, settings)
     if memory is not None:
-        imem, dmem = memory
-        files["demu/linker.ld"] = render_demu_linker(imem, dmem, digest, root)
-        files["demu/start.S"] = render_template(
-            root / "sim/templates/rv32_start.S.in", {"CONFIG_DIGEST": digest}
+        image, data, banks = memory
+        files[f"{FIRMWARE_DIR}/linker.ld"] = render_demu_linker(
+            image, data, banks, digest, root
+        )
+        files[f"{FIRMWARE_DIR}/start.S"] = render_template(
+            root / BAREMETAL_TEMPLATES / "start.S.in", {"CONFIG_DIGEST": digest}
         )
     return files
 
@@ -234,17 +256,12 @@ def collect(config, entry, directory, snapshot):
     (results / "platform.json").write_text(json.dumps(platform, indent=2) + "\n")
 
     if firmware_memory(config, settings) is not None:
-        firmware = Path("build/generated/demu")
+        firmware = Path("build/generated") / FIRMWARE_DIR
         shutil.copy2(firmware / "linker.ld", results / "linker.ld")
         shutil.copy2(firmware / "start.S", results / "start.S")
 
 
 def run(config, entry, directory):
-    if not os.environ.get("PROGRAM"):
-        raise ConfigError("Use make sim-run PROGRAM=path/to/program.bin")
-    program = Path(os.environ["PROGRAM"]).resolve()
-    if not program.is_file():
-        raise ConfigError(f"Program does not exist: {program}")
     simulation = entry["settings"]
     argv = [
         str(directory / "results" / executable_names(config)["simulator"]),
@@ -255,23 +272,26 @@ def run(config, entry, directory):
     ]
     if entry["settings"]["trace"]:
         argv.append("--trace")
-    return {
-        "commands": [
-            argv + shlex.split(os.environ.get("SIM_ARGS", "")) + [str(program)]
-        ],
-        "inputs": [str(program)],
-    }
+    argv.extend(shlex.split(os.environ.get("SIM_ARGS", "")))
+    inputs = []
+    if os.environ.get("PROGRAM"):
+        program = Path(os.environ["PROGRAM"]).resolve()
+        if not program.is_file():
+            raise ConfigError(f"Program does not exist: {program}")
+        argv.append(str(program))
+        inputs.append(str(program))
+    return {"commands": [argv], "inputs": inputs}
 
 
-def normalize_simulation(settings, architecture, *, virt_harness, section):
+def normalize_simulation(settings, *, virt_harness, section):
     simulation = {
         key: settings[key]
         for key in ("reset_cycles", "max_cycles", "ports", "devices")
         if key in settings
     }
     ports = simulation.get("ports", [])
-    if not isinstance(ports, list) or not ports:
-        raise ConfigError(f"{section}.ports: expected a nonempty array of tables")
+    if not isinstance(ports, list):
+        raise ConfigError(f"{section}.ports: expected an array of tables")
     normalized_ports = []
     port_names = set()
     for index, port in enumerate(ports):
@@ -304,21 +324,21 @@ def normalize_simulation(settings, architecture, *, virt_harness, section):
             raise ConfigError(f"{location}: expected a table")
         reject_unknown(
             device,
-            {"name", "type", "base", "size", "load_address"},
+            {"name", "type", "base", "size", "load_address", "firmware_data"},
             location,
         )
 
         name = require_string(device, "name", location)
-        if not IDENTIFIER.match(name):
+        if not IDENTIFIER.fullmatch(name):
             raise ConfigError(f"{location}.name: expected an identifier")
         if name in device_names:
             raise ConfigError(f"{location}.name: duplicate device name: {name}")
         device_names.add(name)
 
         device_type = require_string(device, "type", location)
-        if device_type not in {"tcm", "console", "host_exit"}:
+        if device_type not in DEVICE_TYPES:
             raise ConfigError(
-                f'{location}.type: expected "tcm", "console", or "host_exit"'
+                f"{location}.type: expected one of {', '.join(DEVICE_TYPES)}"
             )
         base = unsigned_integer(device.get("base"), f"{location}.base")
         size = unsigned_integer(device.get("size"), f"{location}.size", positive=True)
@@ -332,9 +352,9 @@ def normalize_simulation(settings, architecture, *, virt_harness, section):
             "size": size,
         }
         if "load_address" in device:
-            if device_type != "tcm":
+            if device_type not in IMAGE_MEMORY_TYPES:
                 raise ConfigError(
-                    f"{location}.load_address: only TCM devices can define a load address"
+                    f"{location}.load_address: expected a memory device that can load an image"
                 )
             load_address = unsigned_integer(
                 device["load_address"], f"{location}.load_address"
@@ -344,6 +364,14 @@ def normalize_simulation(settings, architecture, *, virt_harness, section):
                     f"{location}.load_address: address is outside the device"
                 )
             normalized_device["load_address"] = load_address
+
+        firmware_data = device.get("firmware_data", False)
+        if not isinstance(firmware_data, bool):
+            raise ConfigError(f"{location}.firmware_data: expected a boolean")
+        if firmware_data:
+            if device_type not in DATA_MEMORY_TYPES:
+                raise ConfigError(f"{location}.firmware_data: expected writable memory")
+            normalized_device["firmware_data"] = True
 
         normalized_devices.append(normalized_device)
 
@@ -356,28 +384,18 @@ def normalize_simulation(settings, architecture, *, virt_harness, section):
             )
 
     load_devices = [device for device in normalized_devices if "load_address" in device]
-    if len(load_devices) != 1:
+    if len(load_devices) > 1:
         raise ConfigError(
-            f"{section}.devices: exactly one TCM must define load_address"
+            f"{section}.devices: at most one device can define load_address for PROGRAM"
+        )
+    if sum(device.get("firmware_data", False) for device in normalized_devices) > 1:
+        raise ConfigError(
+            f"{section}.devices: select at most one default firmware data bank"
         )
     if sum(device["type"] == "host_exit" for device in normalized_devices) > 1:
         raise ConfigError(
             f"{section}.devices: at most one host_exit device is supported"
         )
-
-    if virt_harness:
-        devices_by_name = {device["name"]: device for device in normalized_devices}
-        for name in ("imem", "dmem"):
-            device = devices_by_name.get(name)
-            if device is None or device["type"] != "tcm":
-                raise ConfigError(
-                    f'{section}.devices: "{name}" must be configured with type = "tcm"'
-                )
-
-        if devices_by_name["imem"].get("load_address") != architecture["reset_vector"]:
-            raise ConfigError(
-                f"{section}.devices: imem.load_address must equal architecture.reset_vector"
-            )
 
     return {
         "reset_cycles": unsigned_integer(
@@ -434,11 +452,6 @@ def render_demu_config(config, digest):
 def render_demu_platform(settings, digest):
     ports = settings["ports"]
     devices = settings["devices"]
-    type_names = {
-        "tcm": "TCM",
-        "console": "Console",
-        "host_exit": "HostExit",
-    }
     port_entries = [
         f"    PortDescriptor{{{cpp_string(port['name'])}}}" for port in ports
     ]
@@ -447,7 +460,7 @@ def render_demu_platform(settings, digest):
         device_entries.append(
             "    DeviceDescriptor{"
             f"{cpp_string(device['name'])}, "
-            f"hal::DeviceType::{type_names[device['type']]}, "
+            f"hal::DeviceType::{DEVICE_TYPES[device['type']]}, "
             f"UINT64_C({device['base']}), UINT64_C({device['size']}), "
             f"{'true' if 'load_address' in device else 'false'}, "
             f"UINT64_C({device.get('load_address', 0)})"
@@ -487,16 +500,56 @@ def render_demu_platform_package(settings, digest):
     )
 
 
-def render_demu_linker(imem, dmem, digest, root):
-    origin = imem["load_address"]
+def render_demu_linker(image, data, banks, digest, root):
+    origin = image["load_address"]
+    image_length = image["base"] + image["size"] - origin
+    image_flags = "rwx" if image["type"] in DATA_MEMORY_TYPES else "rx"
+    regions = [
+        f"  IMAGE ({image_flags}) : ORIGIN = 0x{origin:08X}, LENGTH = 0x{image_length:X}"
+    ]
+    bank_regions = {}
+    data_sections, bss_sections = [], []
+    copied_sections, zeroed_sections = [".data"], [".bss"]
+    for bank in banks:
+        name = bank["name"]
+        region = "IMAGE" if bank is image else f"TCM_{name}"
+        bank_regions[name] = region
+        if bank is not image:
+            regions.append(
+                f"  {region} (rw) : ORIGIN = 0x{bank['base']:08X}, LENGTH = 0x{bank['size']:X}"
+            )
+
+        data_section = f".tcm.{name}.data"
+        bss_section = f".tcm.{name}.bss"
+        copied_sections.append(data_section)
+        zeroed_sections.append(bss_section)
+        data_sections.append(
+            f"  {data_section} : ALIGN(4)\n"
+            f"  {{\n    *({data_section} {data_section}.*)\n    . = ALIGN(4);\n"
+            f"  }} > {region} AT > IMAGE"
+        )
+        bss_sections.append(
+            f"  {bss_section} (NOLOAD) : ALIGN(4)\n"
+            f"  {{\n    *({bss_section} {bss_section}.*)\n    . = ALIGN(4);\n"
+            f"  }} > {region}"
+        )
+
     return render_template(
-        root / "sim/templates/linker.ld.in",
+        root / BAREMETAL_TEMPLATES / "linker.ld.in",
         {
             "CONFIG_DIGEST": digest,
-            "IMEM_ORIGIN": f"0x{origin:08X}",
-            "IMEM_LENGTH": f"0x{imem['base'] + imem['size'] - origin:X}",
-            "DMEM_ORIGIN": f"0x{dmem['base']:08X}",
-            "DMEM_LENGTH": f"0x{dmem['size']:X}",
+            "MEMORY_REGIONS": "\n".join(regions),
+            "DATA_REGION": bank_regions[data["name"]],
+            "BANK_DATA_SECTIONS": "\n\n".join(data_sections),
+            "BANK_BSS_SECTIONS": "\n\n".join(bss_sections),
+            "COPY_TABLE": "\n".join(
+                f"    LONG(LOADADDR({section})); LONG(ADDR({section})); LONG(SIZEOF({section}));"
+                for section in copied_sections
+            ),
+            "ZERO_TABLE": "\n".join(
+                f"    LONG(ADDR({section})); LONG(SIZEOF({section}));"
+                for section in zeroed_sections
+            ),
         },
     )
 

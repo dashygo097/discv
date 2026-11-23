@@ -6,9 +6,10 @@ ENTRY(_start)
 
 MEMORY
 {
-  IMEM (rx)  : ORIGIN = @IMEM_ORIGIN@, LENGTH = @IMEM_LENGTH@
-  DMEM (rw)  : ORIGIN = @DMEM_ORIGIN@, LENGTH = @DMEM_LENGTH@
+@MEMORY_REGIONS@
 }
+
+REGION_ALIAS("DATA", @DATA_REGION@);
 
 SECTIONS
 {
@@ -16,16 +17,27 @@ SECTIONS
   {
     KEEP(*(.text.start))
     *(.text .text.*)
-  } > IMEM
+  } > IMAGE
 
   .rodata :
   {
     *(.rodata .rodata.*)
     *(.srodata .srodata.*)
     *(.eh_frame .eh_frame.*)
-  } > IMEM
+  } > IMAGE
 
-  .data :
+  .init_tables : ALIGN(4)
+  {
+    __copy_table_start = .;
+@COPY_TABLE@
+    __copy_table_end = .;
+
+    __zero_table_start = .;
+@ZERO_TABLE@
+    __zero_table_end = .;
+  } > IMAGE
+
+  .data : ALIGN(4)
   {
     . = ALIGN(4);
     __data_start = .;
@@ -33,11 +45,15 @@ SECTIONS
     *(.sdata .sdata.*)
     . = ALIGN(4);
     __data_end = .;
-  } > DMEM AT > IMEM
+  } > DATA AT > IMAGE
   __data_load_start = LOADADDR(.data);
   PROVIDE(__global_pointer$ = __data_start + 0x800);
 
-  .bss (NOLOAD) :
+@BANK_DATA_SECTIONS@
+
+@BANK_BSS_SECTIONS@
+
+  .bss (NOLOAD) : ALIGN(4)
   {
     . = ALIGN(4);
     __bss_start = .;
@@ -46,13 +62,12 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __bss_end = .;
-  } > DMEM
+  } > DATA
 
-  . = ALIGN(16);
-  __heap_start = .;
-  __stack_top = (ORIGIN(DMEM) + LENGTH(DMEM)) & ~15;
+  __heap_start = ALIGN(__bss_end, 16);
+  __stack_top = (ORIGIN(DATA) + LENGTH(DATA)) & ~15;
   __heap_end = __stack_top;
-  ASSERT(__heap_start <= __stack_top, "DMEM overflow")
+  ASSERT(__heap_start <= __stack_top, "Default data memory overflow")
 
   /DISCARD/ :
   {
