@@ -3,22 +3,35 @@
 // RUN: %objcopy %t.elf %t.bin
 // RUN: %simtest %t.bin
 
-.section .text.start, "ax", @progbits
-.globl _start
-.type _start, @function
+#define TEST_CASE_OP ori
+#include "../macros.inc"
 
-_start:
-  addi x1, x0, 10
-  addi x2, x0, 20
-  add x3, x1, x2
-  li x4, 1
-  li x5, 30
-  bne x3, x5, .Lexit
-  li x4, 0
+TEST_BEGIN
+  li t0, 10
+  li t1, 20
+  add t2, t0, t1
+  ori t3, zero, 30
+  CHECK_EQ t2, t3, 1
 
-.Lexit:
-  li x6, HOST_EXIT
-  sw x4, 0(x6)
+  lui t0, 0x80000
+  ori t1, zero, 1
+  sub t3, t0, t1
+  add t2, t3, t1
+  CHECK_EQ t2, t0, 2
 
-.Lhalt:
-  j .Lhalt
+  ori t0, zero, 1
+  addi t2, t0, 2047
+  lui t3, 1
+  srli t3, t3, 1
+  CHECK_EQ t2, t3, 3
+
+  addi t2, zero, -2048
+  ori t3, zero, -2048
+  CHECK_EQ t2, t3, 4
+
+  lui t0, 0x80000
+  ori t1, zero, 1
+  sub t3, t0, t1
+  addi t2, t3, 1
+  CHECK_EQ t2, t0, 5
+TEST_END

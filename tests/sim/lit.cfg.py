@@ -27,6 +27,7 @@ config.test_format = lit.formats.ShTest(execute_external=False)
 config.suffixes = [".S", ".c"]
 config.test_source_root = str(Path(__file__).parent)
 config.test_exec_root = os.environ["SIMTEST_EXEC_ROOT"]
+config.available_features.update(extensions)
 if platform["xlen"] == 32 and "i" in extensions:
     config.available_features.add("rv32i")
 
